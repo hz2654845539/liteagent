@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 模型下载需要网络；除此之外整个应用离线可用 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 提醒工具：API 33+ 通知需运行时权限；API 31+ 精确闹钟需 SCHEDULE_EXACT_ALARM（用户可撤销） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <!-- 只读日历：让助理能回答"我今天有什么安排"。只读不写，权限最小化 -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
+    <application
+        android:name=".LiteAgentApp"
+        android:allowBackup="false"
+        android:label="LiteAgent"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".tool.ReminderReceiver"
+            android:exported="false" />
+    </application>
+
+</manifest>

@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-17",
+  "_comment": "设备分级与参数推荐的唯一数据源。客户端构建时复制到 assets，后端运行时读取同一文件。禁止在任何一端另写一套 if-else。",
+
+  "baseline": {
+    "_comment": "性能基准设备。README 里所有数字以这一档为准，不用旗舰机跑分去吹。实测前不得填任何目标值。",
+    "nominalGb": 8,
+    "socClass": "骁龙 7 系 / 天玑 8000 系",
+    "androidVersion": 14
+  },
+
+  "unsupported": {
+    "belowTotalMemMb": 1500,
+    "message": "这台设备总内存不足 1.5GB，无法在本机运行端侧模型。建议换用内存更大的设备，或改用云端模式。",
+    "_comment": "1.5GB 以下连「仅检索」都没有意义（可用内存通常不到 400MB，导入文档都会 OOM）"
+  },
+
+  "extreme": {
+    "_comment": "极限档：1500-3500MB。能跑 0.5B，但必须 mmap + 短上下文 + 少线程。典型样本：DNAKE v911（Allwinner A537 / 1950MB / Mali-G57 / API 35）",
+    "aboveTotalMemMb": 1500,
+    "belowTotalMemMb": 3500,
+    "modelId": "Qwen2.5-0.5B-Instruct-MNN",
+    "contextLength": 1024,
+    "threads": 3,
+    "useGpu": false,
+    "reason": "极限模式：1K 上下文 + mmap。回答短问题够用，长篇生成会很慢"
+  },
+
+  "memTiers": [
+    {
+      "nominalGb": 4,
+      "modelId": "Qwen2.5-0.5B-Instruct-MNN",
+      "quantization": "W4",
+      "contextLength": 2048,
+      "reason": "内存偏小，优先保证不崩，用 0.5B 换稳定"
+    },
+    {
+      "nominalGb": 6,
+      "modelId": "Qwen2.5-1.5B-Instruct-MNN",
+      "quantization": "W4",
+      "contextLength": 3072,
+      "reason": "6GB 够放下 1.5B W4，体验明显好于 0.5B"
+    },
+    {
+      "nominalGb": 8,
+      "modelId": "Qwen2.5-1.5B-Instruct-MNN",
+      "quantization": "W4",
+      "contextLength": 4096,
+      "reason": "1.5B 是体积与质量的平衡点，8GB 可开 4K 上下文"
+    },
+    {
+      "nominalGb": 12,
+      "modelId": "Qwen2.5-3B-Instruct-MNN",
+      "quantization": "W4",
+      "contextLength": 4096,
+      "reason": "内存充裕，3B 的理解能力明显更强"
+    },
+    {
+      "nominalGb": 16,
+      "modelId": "Qwen2.5-3B-Instruct-MNN",
+      "quantization": "W4",
+      "contextLength": 4096,
+      "reason": "3B 仍是甜点；7B 默认不推荐，留给实验开关"
+    }
+  ],
+
+  "threads": {
+    "defaultCores": 4,
+    "maxCores": 6,
+    "_comment": "min(cpuCores, maxCores)；小核多的机型压到 4，超过 6 线程收益递减且发热明显"
+  },
+
+  "gpu": {
+    "minGlesMajor": 3,
+    "supportedRendererPrefixes": ["Adreno", "Mali", "Immortalis", "PowerVR"],
+    "_comment": "MNN 的 GPU backend 是 OpenCL，Android 无公开查询 API，只能用 GL_RENDERER + GLES 版本推断"
+  },
+
+  "mmap": {
+    "enabledWhenFreeStorageMbAbove": 4096,
+    "enabledWhenTotalMemMbBelow": 8192,
+    "_comment": "内存紧张时开 mmap 降峰值，但需要一块可写缓存目录；存储不足则不启用"
+  },
+
+  "sampling": {
+    "temperature": 0.7,
+    "topP": 0.9
+  }
+}

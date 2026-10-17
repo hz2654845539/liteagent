@@ -1,0 +1,139 @@
+{
+  "version": 2,
+  "_comment": "模型清单。sha256 与文件列表来自 ModelScope 仓库 API 的实际返回。注意三个模型的文件组成不同：0.5B/3B 有独立 embeddings_bf16.bin，1.5B 没有。",
+  "models": [
+    {
+      "id": "Qwen2.5-0.5B-Instruct-MNN",
+      "repoId": "MNN/Qwen2.5-0.5B-Instruct-MNN",
+      "displayName": "Qwen2.5-0.5B W4",
+      "quantization": "W4",
+      "totalBytes": 556805914,
+      "minMemoryMb": 3500,
+      "contextLength": 2048,
+      "files": [
+        {
+          "name": "config.json",
+          "size": 159,
+          "sha256": "7636b063425bdbc0e2e429cb23af7f594b5ba145bab2045dfda852416d9285de"
+        },
+        {
+          "name": "llm.mnn",
+          "size": 566264,
+          "sha256": "480da511e603bd82f8d4af4e1f778ad72baadf8307f3585465ad9a94daca1a88"
+        },
+        {
+          "name": "llm.mnn.json",
+          "size": 2808932,
+          "sha256": "245ce4289f456dcb371a8f8deabf75c3c4ee75f34b19e0d9723ba09b2fbacf8c"
+        },
+        {
+          "name": "llm.mnn.weight",
+          "size": 277967498,
+          "sha256": "7ed0f4dcdd31dca15fcb548d2fc8b63b0014031fbd5f627508435726f90c75da"
+        },
+        {
+          "name": "embeddings_bf16.bin",
+          "size": 272269312,
+          "sha256": "4e96b0df6d274768cbb7e72404011853d23349999b658dc2f4dfb3c431ea223f"
+        },
+        {
+          "name": "tokenizer.txt",
+          "size": 3193477,
+          "sha256": "b86f1298a0d6a1b2f312946c2f674f883f1d134ccabc79c42dd4c6b5beadf37b"
+        },
+        {
+          "name": "llm_config.json",
+          "size": 272,
+          "sha256": "ec05709b4261d59b510a0b7a636c6dcb6c5635c08fee7eb3c4f04188b509694b"
+        }
+      ]
+    },
+    {
+      "id": "Qwen2.5-1.5B-Instruct-MNN",
+      "repoId": "MNN/Qwen2.5-1.5B-Instruct-MNN",
+      "displayName": "Qwen2.5-1.5B W4",
+      "quantization": "W4",
+      "totalBytes": 879481306,
+      "minMemoryMb": 5500,
+      "contextLength": 4096,
+      "files": [
+        {
+          "name": "config.json",
+          "size": 159,
+          "sha256": "7636b063425bdbc0e2e429cb23af7f594b5ba145bab2045dfda852416d9285de"
+        },
+        {
+          "name": "llm.mnn",
+          "size": 1145128,
+          "sha256": "5a57a643ad6dbb38d36660e6ce0968d82725929311d455934768280b939863d5"
+        },
+        {
+          "name": "llm.mnn.json",
+          "size": 6650652,
+          "sha256": "3d34e0f4957cf408a59a1965ffeaa58bdcb456195ea0fe39e0bcd6aad5554ee4"
+        },
+        {
+          "name": "llm.mnn.weight",
+          "size": 868491506,
+          "sha256": "94a73a713aed33d6356c2f050d431d94c14711a75e6b500869b21b3b720aa5fb"
+        },
+        {
+          "name": "tokenizer.txt",
+          "size": 3193477,
+          "sha256": "b86f1298a0d6a1b2f312946c2f674f883f1d134ccabc79c42dd4c6b5beadf37b"
+        },
+        {
+          "name": "llm_config.json",
+          "size": 384,
+          "sha256": "9c877345bb9a88a6ff81c31f28c9c8680898bb2593f00cff9fac9e85a2681554"
+        }
+      ]
+    },
+    {
+      "id": "Qwen2.5-3B-Instruct-MNN",
+      "repoId": "MNN/Qwen2.5-3B-Instruct-MNN",
+      "displayName": "Qwen2.5-3B W4",
+      "quantization": "W4",
+      "totalBytes": 2369481387,
+      "minMemoryMb": 9000,
+      "contextLength": 4096,
+      "files": [
+        {
+          "name": "config.json",
+          "size": 159,
+          "sha256": "7636b063425bdbc0e2e429cb23af7f594b5ba145bab2045dfda852416d9285de"
+        },
+        {
+          "name": "llm.mnn",
+          "size": 1180432,
+          "sha256": "82c4a314480083d5b296406f041f29b288bc3c385cef43dc32cf0f6f04202625"
+        },
+        {
+          "name": "llm.mnn.json",
+          "size": 6698403,
+          "sha256": "71798f3a4c58df0c293a8cfb8d83b40203303d0fbf3db48b71f656aa058eef9e"
+        },
+        {
+          "name": "llm.mnn.weight",
+          "size": 1736078786,
+          "sha256": "c636ff0997d97535cea70f12331a4212fc0fa25fece6a9893944c2f7d1777a88"
+        },
+        {
+          "name": "embeddings_bf16.bin",
+          "size": 622329856,
+          "sha256": "03bd8df1218b5bcb8439e6a0d10d49e2cbc55e002f6552401e3e0cc71291fe87"
+        },
+        {
+          "name": "tokenizer.txt",
+          "size": 3193477,
+          "sha256": "b86f1298a0d6a1b2f312946c2f674f883f1d134ccabc79c42dd4c6b5beadf37b"
+        },
+        {
+          "name": "llm_config.json",
+          "size": 274,
+          "sha256": "2e2ee1d767ea84d0a2f5c549dac7413d0debf8a7ec6abd7ade4e77b8e294ada5"
+        }
+      ]
+    }
+  ]
+}

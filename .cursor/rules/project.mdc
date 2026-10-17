@@ -1,0 +1,55 @@
+---
+description: LiteAgent 项目长期规则（Android + MNN + FastAPI 单仓）
+globs: ["**/*.kt", "**/*.cpp", "**/*.h", "**/*.py", "**/*.md"]
+alwaysApply: true
+---
+
+# LiteAgent 项目规则
+
+完整规则见仓库根 `AGENTS.md`，这里放 Cursor 每次对话都要看到的硬约束。
+
+## 产品前提
+
+完全离线的手机 AI 助理。三个不可动摇的原则：
+
+1. 本地 RAG 是主功能，聊天只是入口
+2. 一份 APK 自适应多机型（设备探测 + 模型分级）
+3. 数据不出设备——任何需要上传的实现都违背产品前提
+
+## 三条硬约束
+
+1. **MNN 相关代码先查 `.refs/MNN`，查不到写「未确认」，禁止编 API。**
+2. **编译验收看产物符号，不看 BUILD SUCCESSFUL。**
+   例：编完 `libMNN.so` 必须 `llvm-nm -D | grep createLLM` 有输出。
+3. **不留 TODO 宣称完成。** 编译不过、测试不过都不算完。
+
+## 已核实的 MNN 契约
+
+- 头文件：`transformers/llm/engine/include/llm/llm.hpp`（不是 `include/MNN/expr/Transformer.hpp`，那个不存在）
+- 创建：`Llm::createLLM(configPath)` → `set_config(json)` → `load()`
+- 推理：`response(content, std::ostream*, end_with, max_new_tokens)`，**阻塞、无回调**
+- 中断：`response(..., 0)` 做 prefill，再 `while{ generate(1) }` 逐 token 解码
+- 性能：`LlmContext.ttfa_us / prefill_us / decode_us / load_us`
+- GPU：OpenCL（`-DMNN_OPENCL=ON`），不是 Vulkan
+
+## 代码分层
+
+```
+ui/          Compose，不碰 JNI
+engine/      LlmEngine，callbackFlow 对外
+capability/  DeviceProfiler / RecommendEngine（纯函数，可测）
+data/        ModelStore / ModelDownloader / DocumentStore
+rag/         TextChunker / Bm25Index / RagEngine
+tool/        ToolCallParser / ToolRouter / SkillRouter
+cpp/         llm_jni.cpp —— 唯一直接碰 MNN 的地方
+```
+
+engine 与 capability **不依赖 UI**。
+
+## 改完自查
+
+- [ ] 能编译吗
+- [ ] 单测过吗（新增逻辑有没有对应用例）
+- [ ] JNI 资源释放了吗
+- [ ] 主线程有没有做 IO / 阻塞调用
+- [ ] 新增依赖说明体积代价了吗
