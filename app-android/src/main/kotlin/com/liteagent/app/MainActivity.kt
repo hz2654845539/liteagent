@@ -73,23 +73,32 @@ class MainActivity : ComponentActivity() {
                     // 所以留一个跳过 UI 输入的入口。正式包不会带这个 extra。
                     val autoPrompt = intent?.getStringExtra(EXTRA_AUTOTEST)
                     val autoModel = intent?.getStringExtra(EXTRA_AUTOMODEL)
-                    if ((!autoPrompt.isNullOrBlank() || !autoModel.isNullOrBlank()) &&
-                        savedInstanceState == null
-                    ) {
-                        LaunchedEffect(autoPrompt, autoModel) {
-                            // 先切模型（如果指定了），等它落定再加载
+                    val autoBench = intent?.getStringExtra(EXTRA_AUTOBENCH)
+                    val threadsOverride = intent?.getIntExtra(EXTRA_THREADS, 0) ?: 0
+                    val hasAuto = !autoPrompt.isNullOrBlank() || !autoModel.isNullOrBlank() ||
+                        autoBench == "1"
+                    if (hasAuto && savedInstanceState == null) {
+                        LaunchedEffect(autoPrompt, autoModel, autoBench, threadsOverride) {
                             if (!autoModel.isNullOrBlank()) {
                                 vm.selectModel(autoModel)
                                 withTimeoutOrNull(20_000) {
                                     while (vm.state.value.modelId != autoModel) delay(200)
                                 }
                             }
-                            if (!vm.state.value.engineReady) vm.loadModel()
-                            if (!autoPrompt.isNullOrBlank()) {
-                                withTimeoutOrNull(90_000) {
-                                    while (!vm.state.value.engineReady) delay(500)
-                                    vm.send(autoPrompt)
+                            if (!vm.state.value.engineReady) {
+                                vm.loadModel(threadsOverride.takeIf { it > 0 })
+                            }
+                            withTimeoutOrNull(120_000) {
+                                while (!vm.state.value.engineReady) delay(300)
+                            }
+                            when {
+                                autoBench == "1" -> {
+                                    vm.runBenchmark()
+                                    withTimeoutOrNull(600_000) {
+                                        while (vm.state.value.benchmark == null) delay(1000)
+                                    }
                                 }
+                                !autoPrompt.isNullOrBlank() -> vm.send(autoPrompt)
                             }
                         }
                     }
@@ -99,8 +108,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        /** adb 自测用：am start ... --es autotest "你好" --es automodel "Qwen2.5-1.5B-Instruct-MNN" */
+        /**
+         * adb 自测入口：
+         *   --es autotest "你好"                    发一条消息
+         *   --es automodel "Qwen2.5-1.5B-Instruct-MNN"  指定模型
+         *   --es autobench "1"                      跑一轮 benchmark 并落盘
+         *   --ei threads 4                          覆盖线程数（调优实验用）
+         */
         const val EXTRA_AUTOTEST = "autotest"
         const val EXTRA_AUTOMODEL = "automodel"
+        const val EXTRA_AUTOBENCH = "autobench"
+        const val EXTRA_THREADS = "threads"
     }
 }

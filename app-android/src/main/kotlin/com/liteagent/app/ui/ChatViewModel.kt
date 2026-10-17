@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 data class ChatUiState(
@@ -69,7 +70,9 @@ data class ChatUiState(
     val currentSessionId: String? = null,
     val presetId: String = "assistant",
     /** 仅检索模式：不调用模型，直接返回原文段落。模型跑不动时的兜底。 */
-    val retrievalOnly: Boolean = false
+    val retrievalOnly: Boolean = false,
+    /** 实际加载时用的线程数。跑分要按这个值记录，不能用推荐值——调优实验时两者会不一致 */
+    val loadedThreads: Int = 0
 )
 
 /**
@@ -278,7 +281,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun loadModel() {
+    /** threadsOverride 只给调优实验用：覆盖推荐规则里的线程数，其他参数照旧 */
+    fun loadModel(threadsOverride: Int? = null) {
         val e = currentEntry ?: return
         if (!store.isReady(e)) {
             _state.update { it.copy(error = "模型文件不完整，请先下载") }
@@ -287,10 +291,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             val rec = _state.value.recommendation.modelOrNull()
+            val threads = threadsOverride ?: rec?.threads ?: 4
             val config = buildString {
                 append("{")
                 append("\"backend_type\":\"").append(if (rec?.useGpu == true) "opencl" else "cpu").append("\",")
-                append("\"thread_num\":").append(rec?.threads ?: 4).append(",")
+                append("\"thread_num\":").append(threads).append(",")
                 append("\"precision\":\"low\",")
                 append("\"memory\":\"low\"")
                 append("}")
@@ -304,6 +309,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 it.copy(
                     loading = false,
                     engineReady = result.isSuccess,
+                    loadedThreads = if (result.isSuccess) threads else 0,
                     error = result.exceptionOrNull()?.message
                 )
             }
@@ -499,13 +505,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         viewModelScope.launch {
+            // 用实际加载的线程数，不是推荐值：调优实验时要能看出 2/3/4/5 线程的差异
+            val threads = _state.value.loadedThreads.takeIf { it > 0 } ?: rec?.threads ?: 4
             val report = withContext(Dispatchers.IO) {
                 BenchmarkRunner(engine).run(
                     modelId = currentEntry?.id ?: "unknown",
-                    threads = rec?.threads ?: 4,
+                    threads = threads,
                     useGpu = rec?.useGpu == true
                 ) { index, total ->
                     _state.update { it.copy(benchmarkProgress = index, benchmarkTotal = total) }
+                }.also { result ->
+                    // 落盘一份，方便 adb pull 做离线对比；UI 上的「导出 JSON」是给用户用的
+                    runCatching {
+                        val dir = File(getApplication<Application>().filesDir, "benchmark")
+                            .apply { mkdirs() }
+                        val file = File(dir, "bench_${threads}t_${System.currentTimeMillis()}.json")
+                        file.writeText(result.toJson())
+                        android.util.Log.i("Benchmark", "saved ${file.absolutePath}")
+                    }
                 }
             }
             _state.update { it.copy(benchmarking = false, benchmark = report) }
