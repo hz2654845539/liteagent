@@ -229,6 +229,7 @@ GPU 判断：GLES ≥ 3.0 且 GL_RENDERER 命中 Adreno/Mali/Immortalis 前缀�
 
 | 文件 | 内容 |
 |---|---|
+| [`docs/CODE-MAP.md`](docs/CODE-MAP.md) | **代码导览**：跟着一次提问走完整流程，第一次读代码从这里开始 |
 | [`docs/00-research.md`](docs/00-research.md) | MNN 真实 API 契约、集成路径对比、编译实测 |
 | [`docs/FEATURES.md`](docs/FEATURES.md) | **功能说明书**：每个功能怎么用、前置条件、失败表现、数据在哪 |
 | [`docs/01-code-review.md`](docs/01-code-review.md) | 首轮自审 9 条（2 条 P0）|
