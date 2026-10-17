@@ -76,7 +76,19 @@ data class ChatUiState(
     /** 输入框内容提升到 VM：OCR 识别完要能回填，UI 本地状态做不到 */
     val draft: String = "",
     /** 图片识别中 */
-    val ocrRunning: Boolean = false
+    val ocrRunning: Boolean = false,
+    /**
+     * 本次输入附带了一张图片（OCR 结果已经填进输入框）。
+     *
+     * 为什么需要这个标记：图片问答时用户的意图是"读这张图"，
+     * 不是"查我的文档库"。但 OCR 出来的文字会命中 BM25
+     * （比如图里有"量化精度"就检索到技术文档），
+     * 结果文档片段和图片文字一起进 prompt，模型把两者混着说。
+     *
+     * 有这个标记就能在发问时跳过检索。用户想"图片 + 文档对照"时，
+     * 可以手动关掉这个标记（UI 上有开关）。
+     */
+    val imageAttached: Boolean = false
 )
 
 /**
@@ -382,7 +394,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 maybeCompactHistory()
             }
 
-            val prepared = withContext(Dispatchers.IO) { preparePrompt(content) }
+            val prepared = withContext(Dispatchers.IO) {
+                preparePrompt(content, skipRag = _state.value.imageAttached)
+            }
 
             // 第一轮：带上工具 schema，模型可能直接回答，也可能吐一个 JSON 调用
             val budget = if (_state.value.recommendation is Recommendation.Restricted) {
@@ -432,7 +446,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 attachCitations(assistantId, firstPass, prepared.hits)
             }
 
-            _state.update { it.copy(generating = false, perf = engine.perf()) }
+            // 这次用完了，"附带图片"的标记要清掉，否则下一条普通问题也会跳过检索
+            _state.update {
+                it.copy(generating = false, perf = engine.perf(), imageAttached = false)
+            }
             persistSession()
         }
     }
@@ -566,7 +583,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private suspend fun preparePrompt(input: String): PreparedPrompt {
+    private suspend fun preparePrompt(
+        input: String,
+        skipRag: Boolean = false
+    ): PreparedPrompt {
         val preset = PresetStore.find(_state.value.presetId)
         // 极限档（0.5B）不注入工具 schema：实测它会照着里面的示例逐行复述，
         // 而不是回答问题。参数太少的模型分不清"示例"和"该输出的内容"。
@@ -579,6 +599,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (skillText != null) {
             system += "\n\n" + skillText
         }
+
+        // 图片问答不走检索。
+        // 实测踩过的坑：图里有"量化精度 W4"，BM25 就命中了技术文档，
+        // 于是文档片段和图片文字一起进 prompt，模型把两者混着说，
+        // 还编出"Qwen2.5-0.7B/0.9B/1.1B"这些不存在的型号。
+        // 用户问"这张图讲了什么"时，他不关心文档库里有什么。
+        if (skipRag) return PreparedPrompt(input, system, emptyList())
 
         val hits = ragEngine.retrieve(input)
         if (hits.isEmpty()) return PreparedPrompt(input, system, emptyList())
@@ -681,7 +708,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setDraft(text: String) {
-        _state.update { it.copy(draft = text) }
+        // 用户把输入框清空时，图片也视为不再附带——否则标记会一直挂着
+        _state.update {
+            it.copy(draft = text, imageAttached = if (text.isBlank()) false else it.imageAttached)
+        }
+    }
+
+    /** 用户手动切换"这次要不要参考文档库" */
+    fun toggleImageOnly() {
+        _state.update { it.copy(imageAttached = !it.imageAttached) }
     }
 
     /**
@@ -710,7 +745,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         if (text.length > MAX_OCR_CHARS) append("\n…（已截断）")
                     }
                     _state.update {
-                        it.copy(ocrRunning = false, draft = merged, error = null)
+                        it.copy(
+                            ocrRunning = false,
+                            draft = merged,
+                            imageAttached = true,
+                            error = null
+                        )
                     }
                 },
                 onFailure = { err ->
