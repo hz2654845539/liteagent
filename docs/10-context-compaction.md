@@ -110,9 +110,83 @@ val pending = all.drop(session.summarizedCount)
     .filter { it.content.isNotBlank() && it.id != currentUser?.id }
 ```
 
-## 七、还没做的
+## 七、第二个坑：单条消息超预算时被整条丢掉
 
-1. **阈值偏低**。300 字触发太频繁，一次只压一半，等于每两轮压一次、每次多等 8 秒。应该提到 600 左右，一次压掉更多。
-2. **摘要是单句拼接**。多次压缩后用"；"连起来，到后面会变成一串没有逻辑关系的短句。应该做成"重新总结已有的摘要 + 新内容"，而不是追加。
+调阈值的时候顺手加了一组 4 轮的测试，日志很反常：
+
+```
+turn=1  size=2  system:48,user:8
+turn=2  size=2  system:48,user:9        ← 第二轮居然没有历史？
+Compact: compacted=2 chars=660 -> summary=134
+```
+
+turn=2 的 `size=2` 说明一条历史都没带上。但压缩日志又说 `chars=660`——第 1 轮的回答有 650 字。
+
+翻会话文件确认了：`assistant` 的内容确实是 650 字。而预算只有 300。
+
+```kotlin
+for (msg in history.asReversed()) {
+    if (used + msg.content.length > charBudget) break   // 650 > 300 → 直接 break
+}
+```
+
+**单条消息超过预算时，`break` 让整条被丢弃，一条历史都进不去。**
+
+后果很荒谬：模型回答越详细，下一轮越记不住自己说过什么。而 0.5B 恰恰很爱长篇输出。
+
+修法：**截断，而不是丢弃**。
+
+```kotlin
+val remaining = charBudget - used
+val text = if (msg.content.length > remaining) {
+    msg.content.takeLast(remaining)   // 保留末尾：结论通常在最后，开头多是铺垫
+} else {
+    msg.content
+}
+```
+
+修复后的同一组测试：
+
+```
+turn=1  size=2  system:48,user:8
+turn=2  size=4  system:48,user:8,assistant:268,user:8
+turn=3  size=5  system:48,assistant:32,user:8,assistant:260,user:5
+```
+
+650 字的回答被截到 268 字带了进去，turn=3 又多了 32 字摘要。首字延迟 1630 → 9011 → 9948 ms，比之前 12–17 秒明显好。
+
+## 八、阈值从 300 提到 600
+
+300 时每两轮就要压一次，每次多等 8 秒，用户会觉得"打字打着打着卡一下"。
+
+提到 600（约 3 轮对话）：压一次能管好几轮，感知更平滑。代价是触发那一刻上下文到 600 字（prefill 约 24 秒），但这是一次性的，不是每轮都付。
+
+## 九、摘要是"重新总结"，不是"往后追加"
+
+第一版把新摘要用「；」接在旧摘要后面：
+
+```
+用户在问端侧推理；用户问了 MNN；用户提到 llama.cpp
+```
+
+到第 5、6 轮就变成一串没有逻辑关系的碎句，读起来像乱码。
+
+改成合并式：把旧摘要和新对话一起交给模型，让它重新写一段。
+
+```kotlin
+if (session.summary.isBlank()) {
+    "把下面的对话压缩成不超过 50 字的中文摘要…"
+} else {
+    "已有摘要：${session.summary}\n\n新的对话：\n$dialog\n\n" +
+        "把已有摘要和新对话合并成一段不超过 80 字的中文摘要。"
+}
+```
+
+代价是每次压缩要读的字更多（旧摘要 + 新对话），但摘要质量完全不同。
+
+## 十、还没做的
+
+
+
 3. **摘要质量没评估**。没验证过 50 字摘要能不能覆盖关键事实（比如具体的数字、方案名）。这需要一套固定问答集来测。
 4. **没有手动入口**。用户不能主动"清空上下文但保留摘要"，也不能查看摘要内容。

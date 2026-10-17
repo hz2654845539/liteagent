@@ -450,13 +450,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * 那既浪费 prefill（手机上很贵），又会诱导模型硬套资料。
      */
     /**
-     * 组装发给模型的消息序列。
+     * 组装「这次要发给模型的消息」。
      *
-     * 之前只发 system + 当前问题，导致多轮指代完全失效——用户说"再说一遍要点"，
-     * 模型看不到上一轮说过什么，只能瞎猜。界面上看起来是多轮对话，实际每轮都是孤立的。
+     * ───────────────────────────────────────────────────────────────
+     * 【它在干什么】
      *
-     * 加历史要付 prefill 代价（这台设备 15 tok/s，多 300 字就多 20 秒），
-     * 所以按字符预算从最近往前取，超了就丢最早的。
+     * 模型本身不记事。它每回答一次，你都得把「该让它看到的东西」重新交一遍。
+     * 这个函数就是决定：这次到底给它看哪些内容、按什么顺序。
+     *
+     * 用户第 3 次提问时，实际发出去的列表长这样：
+     *
+     *   system    : 你是一个运行在手机本地的 AI 助理……     ← 人格设定，每次都带
+     *   assistant : 之前对话的摘要：用户在问端侧推理……      ← 早期对话压成的一句话
+     *   user      : 用一句话说明什么是 MNN                  ← 最近一轮的问答
+     *   assistant : MNN 是阿里开源的推理框架……
+     *   user      : 那它和 llama.cpp 比呢？                 ← 这次要问的
+     *
+     * ───────────────────────────────────────────────────────────────
+     * 【为什么不能把全部聊天记录塞进去】
+     *
+     * 模型每读一个字都要花时间，这一步叫 prefill（预填充）。
+     * 这台设备每秒只能读 25 个字，塞 600 字就要等 24 秒才吐出第一个字。
+     *
+     * 实测（DNAKE v911 / 2GB 内存 / Qwen2.5-0.5B）：
+     *   不带历史        → 1.8 秒出第一个字
+     *   带 600 字历史   → 17.0 秒出第一个字
+     *
+     * 所以历史必须设上限。超出的部分不扔掉，而是压成摘要，见 [maybeCompactHistory]。
+     *
+     * @param system        人格设定 + 工具说明，每次都带
+     * @param currentPrompt 用户这次问的话（可能已被 RAG 加工过，前面拼了检索到的资料）
+     * @param charBudget    历史部分最多带多少字，默认 300
+     * @return (角色, 内容) 的列表，直接交给 [LlmEngine.generate]
      */
     private fun buildMessages(
         system: String,
@@ -464,10 +489,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         charBudget: Int = HISTORY_CHAR_BUDGET
     ): List<Pair<String, String>> {
         val result = mutableListOf<Pair<String, String>>()
+
+        // 第一条永远是 system：告诉模型"你是谁、该怎么说话"
         if (system.isNotBlank()) result.add("system" to system)
 
         val session = currentSession
-        // 已经被摘要覆盖的早期消息不再重发，界面上照常显示
+
+        // 早期对话已经被压缩过的话，这里补一句摘要，
+        // 让模型知道自己"记得"开头聊过什么（界面上那些消息仍然在，只是不重发了）
         val covered = session?.summarizedCount ?: 0
         val summary = session?.summary.orEmpty()
         if (summary.isNotBlank()) {
@@ -475,24 +504,45 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val all = _state.value.messages.drop(covered)
-        // 尾部有一条空的 assistant 占位（等流式填充），先剥掉；
-        // 再去掉最后一条用户消息——它就是 currentPrompt，下面会重新加，不然会发两遍
+
+        // 两个"清理"动作，都是踩过坑才加的：
+        // 1) dropLastWhile —— 消息列表末尾有一条内容为空的 assistant 占位消息，
+        //    它是流式输出用的容器，现在还没内容，发给模型是噪音。
+        // 2) 去掉最后一条用户消息 —— 它就是 currentPrompt 本身，
+        //    下面会重新加一次。不去掉的话，同一个问题会被发两遍
+        //    （模型会看到两条一模一样的问句，然后开始胡言乱语）。
         val trimmed = all.dropLastWhile { it.content.isBlank() }
         val lastUserIdx = trimmed.indexOfLast { it.role == com.liteagent.shared.ChatRole.USER }
         val history = trimmed.filterIndexed { idx, msg ->
             idx != lastUserIdx && msg.content.isNotBlank()
         }
 
+        // 从最近的消息往前挑，直到把预算用完为止。
+        // 为什么从近往远：越近的内容越相关，用户说"再改一下"指的是刚说的那段。
+        // ArrayDeque.addFirst 是为了保持时间顺序（从后往前挑，但要正着放回去）。
         val picked = ArrayDeque<Pair<String, String>>()
         var used = 0
         for (msg in history.asReversed()) {
             if (msg.content.isBlank()) continue
-            if (used + msg.content.length > charBudget) break
-            // MNN 的 prompt_template 认的是小写 role 名
-            picked.addFirst(msg.role.name.lowercase() to msg.content)
-            used += msg.content.length
+            val remaining = charBudget - used
+            if (remaining <= 0) break
+
+            // 单条就超预算时必须截断，不能整条丢掉。
+            // 踩过的坑：0.5B 一轮回答常有 600+ 字，如果这里直接 break，
+            // 就变成"一条历史都带不上"——用户问"刚才那个"，模型完全不知道指什么。
+            // 截断保留末尾：回答的结论通常在最后，开头多是铺垫。
+            val text = if (msg.content.length > remaining) {
+                msg.content.takeLast(remaining)
+            } else {
+                msg.content
+            }
+            // 角色名必须是 MNN 认识的小写：system / user / assistant
+            picked.addFirst(msg.role.name.lowercase() to text)
+            used += text.length
         }
         result.addAll(picked)
+
+        // 最后一条是这次的问题。放最后是因为对话的顺序就是"说完上文说下文"
         result.add("user" to currentPrompt)
         android.util.Log.i(
             "MultiTurn",
@@ -503,47 +553,75 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 把早期对话压成摘要。
+     * 把早期对话压成一句摘要。
      *
-     * 为什么需要：历史按 300 字截断，超出的直接丢——用户问"第一轮聊了什么"就断片了。
-     * 摘要用一句话留住事实，比丢掉强，也比留全文便宜（一句摘要 ≈30 token，一整轮 ≈200）。
+     * ───────────────────────────────────────────────────────────────
+     * 【打个比方】
      *
-     * 触发时机：发送前，只在未摘要部分超出预算时做。用模型自己压（它见过这些内容），
-     * 生成上限压到 [COMPACT_MAX_TOKENS]，这台设备大约 8 秒。
+     * 你跟朋友聊了两小时，现在要说正事。你不可能把两小时的每句话重讲一遍，
+     * 正常做法是："我们前面聊了 A 和 B，现在说 C。"
+     * 这句「前面聊了 A 和 B」，就是这个函数干的事。
      *
-     * 不做"后台异步压缩"的原因：压缩和生成抢同一个引擎实例，并发会互相踩状态。
-     * 宁可让用户在这一轮多等 8 秒，也不要在后台制造一个不可复现的竞态。
+     * ───────────────────────────────────────────────────────────────
+     * 【为什么必须做】
+     *
+     * 模型每轮都要重读全部历史（原因见 [buildMessages] 的说明）。
+     * 不压缩的话，第 10 轮要读的东西会是第 3 轮的三倍，首字延迟从 12 秒涨到 30 秒以上。
+     *
+     * 压缩之后的效果：
+     *   - 界面上消息一条不少，用户看到的还是完整聊天记录
+     *   - 发给模型时前 N 条跳过，改发一句摘要
+     *   - `session.summarizedCount` 记录"压到第几条了"
+     *
+     * ───────────────────────────────────────────────────────────────
+     * 【为什么不用后台偷偷压】
+     *
+     * 因为压缩本身也要用模型（要生成那句摘要），而模型只有一个实例。
+     * 一边生成回答、一边生成摘要，两边会互相踩对方的内部状态（KV cache、encoder），
+     * 结果就是不可复现的乱码。
+     *
+     * 所以宁可让用户在这一轮多等 8 秒，也不要在后台制造一个"偶尔出鬼"的并发 bug。
      */
     private suspend fun maybeCompactHistory() {
         val session = currentSession ?: return
 
-        // 排除当前正在问的那条：它还没被回答，压进摘要会让模型丢掉眼前的问题。
-        // 同时剥掉尾部空的 assistant 占位。
+        // 先排除「当前正在问的那句话」——它还没被回答，压进摘要等于把问题弄丢了。
+        // dropLastWhile 是剥掉末尾那条空的 assistant 占位（流式输出用的容器）。
         val all = _state.value.messages.dropLastWhile { it.content.isBlank() }
         val currentUser = all.lastOrNull { it.role == com.liteagent.shared.ChatRole.USER }
         val pending = all.drop(session.summarizedCount)
             .filter { it.content.isNotBlank() && it.id != currentUser?.id }
+
+        // 少于 2 条没什么可压的
         if (pending.size < 2) return
 
+        // 还没到阈值就不压。压一次要花 8 秒，不能每轮都压。
         val chars = pending.sumOf { it.content.length }
         if (chars <= COMPACT_TRIGGER_CHARS) return
 
-        // 压掉最早的一半，留一半继续当"近期上下文"
+        // 压掉最早的一半，另一半继续以原文形式留着当"近期上下文"。
+        // 为什么不全部压：用户说"刚才那个再改一下"靠的是最近这轮原文，摘要会丢细节。
         val toCompact = pending.take(maxOf(1, pending.size / 2))
         val dialog = toCompact.joinToString("\n") {
             "${it.role.name.lowercase()}: ${it.content.take(160)}"
         }
-        val prompt = "把下面的对话压缩成不超过 50 字的中文摘要，" +
-            "只保留事实和结论，不要评论，不要加前缀：\n$dialog"
+
+        // 如果之前已经有摘要，这次不是"往后追加"，而是"把旧摘要和新内容重新合成一段"。
+        // 追加会变成"摘要；摘要；摘要"这种没有逻辑关系的短句堆，越到后面越读不懂。
+        val prompt = if (session.summary.isBlank()) {
+            "把下面的对话压缩成不超过 50 字的中文摘要，只保留事实和结论，不要评论，不要加前缀：\n$dialog"
+        } else {
+            "已有摘要：${session.summary}\n\n新的对话：\n$dialog\n\n" +
+                "把已有摘要和新对话合并成一段不超过 80 字的中文摘要，只保留事实和结论。"
+        }
 
         val sb = StringBuilder()
         engine.generate(prompt, "", COMPACT_MAX_TOKENS).collect { sb.append(it) }
         val text = sb.toString().trim().replace("\n", " ")
         if (text.isBlank()) return
 
-        val merged = if (session.summary.isBlank()) text else "${session.summary}；$text"
         val updated = session.copy(
-            summary = merged.take(COMPACT_SUMMARY_MAX_CHARS),
+            summary = text.take(COMPACT_SUMMARY_MAX_CHARS),
             summarizedCount = session.summarizedCount + toCompact.size
         )
         currentSession = updated
@@ -867,15 +945,34 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
          * 所以只能砍预算。300 字约 200 token，prefill ≈ 8 秒，是"记得住上一轮"和
          * "别让用户等太久"之间的折中。
          */
+        /**
+         * 历史消息的字符预算：发给模型的历史最多 300 字，超了就从最早的丢。
+         *
+         * 这个数字是实测调出来的，不是拍的（设备：DNAKE v911 / 2GB 内存）：
+         *   不带历史            → 1.8 秒出第一个字
+         *   带 600 字历史       → 17.0 秒出第一个字
+         *
+         * 为什么 KV 复用救不了这件事：
+         * MNN 有个 reuse_kv 开关（复用上次算好的缓存），但它只在 attention_mode == 10
+         * 时生效，而且底层是给 linear attention 架构写的。我们用标准 attention，
+         * 实测开与不开数据完全一致。所以只能靠砍长度。
+         */
         const val HISTORY_CHAR_BUDGET = 300
 
-        /** 未摘要部分超过这个字符数就触发压缩。和 HISTORY_CHAR_BUDGET 对齐，超过即压缩 */
-        const val COMPACT_TRIGGER_CHARS = 300
+        /**
+         * 未摘要部分超过这个字数就触发压缩。
+         *
+         * 300 时触发太频繁——每两轮就要压一次，每次多等 8 秒，用户会明显感觉到卡顿。
+         * 提到 600：约等于 3 轮对话，压一次能管好几轮，感知更平滑。
+         * 代价是压缩那一刻的上下文会到 600 字（prefill 约 24 秒），
+         * 但这是一次性的，不是每轮都付。
+         */
+        const val COMPACT_TRIGGER_CHARS = 600
 
         /** 摘要生成上限。50 字中文约 40 token，给 80 留余量 */
         const val COMPACT_MAX_TOKENS = 80
 
-        /** 摘要本身的上限，防止多次压缩后无限增长 */
+        /** 摘要本身的上限，防止多次合并后无限增长 */
         const val COMPACT_SUMMARY_MAX_CHARS = 200
     }
 }
