@@ -789,10 +789,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         /**
          * 历史消息的字符预算。
          *
-         * 极限档上下文只有 1K token（约 700 汉字），system + 资料 + 回答已经占掉大半。
-         * 600 字的历史大约 400 token，是"能记住上一轮、又不至于把 prefill 拖爆"的折中。
-         * 真机数据：这台设备 prefill 15 tok/s，400 token 约 27 秒——所以历史不是免费的。
+         * 这个数字是实测调出来的，不是拍的：
+         *   无历史（单轮）  ttft ≈ 1.7 s
+         *   6 条历史 600 字  ttft ≈ 17.0 s
+         * 历史长度直接按比例换成首 token 延迟，这台设备 prefill 只有 25 tok/s。
+         *
+         * KV 复用救不了这件事：MNN 的 reuse_kv 只在 attention_mode == 10 时生效，
+         * 且 replayKeptHistory 是给 linear attention 用的（做法是重新 prefill，
+         * 不是真复用）。实测开关两组数据完全一致，走不通。
+         *
+         * 所以只能砍预算。300 字约 200 token，prefill ≈ 8 秒，是"记得住上一轮"和
+         * "别让用户等太久"之间的折中。
          */
-        const val HISTORY_CHAR_BUDGET = 600
+        const val HISTORY_CHAR_BUDGET = 300
     }
 }
