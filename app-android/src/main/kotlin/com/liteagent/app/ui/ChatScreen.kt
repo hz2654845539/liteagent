@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,9 +30,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -143,26 +147,51 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // 选图 → OCR → 回填输入框。填而不发，是因为 OCR 会认错字，让用户看一眼再发
+            val pickImage = rememberLauncherForActivityResult(
+                ActivityResultContracts.GetContent()
+            ) { uri -> uri?.let { vm.importImage(it) } }
+
+            IconButton(
+                onClick = { pickImage.launch("image/*") },
+                enabled = !state.ocrRunning && !state.generating
+            ) {
+                if (state.ocrRunning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = "从图片识别文字",
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
             OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
+                value = state.draft,
+                onValueChange = vm::setDraft,
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
                         when {
+                            state.ocrRunning -> "正在识别图片…"
                             state.retrievalOnly -> "问文档里的内容（仅检索）"
-                            state.engineReady -> "问点什么…"
+                            state.engineReady -> "问点什么，或点左边选张图"
                             else -> "先加载模型"
                         }
                     )
                 },
                 maxLines = 4,
-                enabled = (state.engineReady || state.retrievalOnly) && !state.generating,
+                enabled = (state.engineReady || state.retrievalOnly) &&
+                    !state.generating && !state.ocrRunning,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = {
-                    if (input.isNotBlank()) {
-                        vm.send(input)
-                        input = ""
+                    if (state.draft.isNotBlank()) {
+                        vm.send(state.draft)
+                        vm.setDraft("")
                     }
                 })
             )
@@ -172,10 +201,10 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             } else {
                 Button(
                     onClick = {
-                        vm.send(input)
-                        input = ""
+                        vm.send(state.draft)
+                        vm.setDraft("")
                     },
-                    enabled = (state.engineReady || state.retrievalOnly) && input.isNotBlank()
+                    enabled = (state.engineReady || state.retrievalOnly) && state.draft.isNotBlank()
                 ) { Text("发送") }
             }
         }

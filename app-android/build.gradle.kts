@@ -93,6 +93,10 @@ dependencies {
     implementation(project(":shared"))
     implementation(libs.kotlinx.serialization.json)
 
+    // 中文 OCR（图片 → 文字）。选 ML Kit 而不是视觉大模型的原因见 docs/08-image-input.md：
+    // Qwen2-VL 最小 2B，这台 2GB 设备跑不动；而 OCR 只需要几十 MB，能把"拍文档问答"跑通。
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

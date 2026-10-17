@@ -74,22 +74,41 @@ class MainActivity : ComponentActivity() {
                     val autoPrompt = intent?.getStringExtra(EXTRA_AUTOTEST)
                     val autoModel = intent?.getStringExtra(EXTRA_AUTOMODEL)
                     val autoBench = intent?.getStringExtra(EXTRA_AUTOBENCH)
+                    val autoOcr = intent?.getStringExtra(EXTRA_AUTOOCR)
                     val threadsOverride = intent?.getIntExtra(EXTRA_THREADS, 0) ?: 0
                     val hasAuto = !autoPrompt.isNullOrBlank() || !autoModel.isNullOrBlank() ||
-                        autoBench == "1"
+                        autoBench == "1" || !autoOcr.isNullOrBlank()
                     if (hasAuto && savedInstanceState == null) {
-                        LaunchedEffect(autoPrompt, autoModel, autoBench, threadsOverride) {
+                        LaunchedEffect(autoPrompt, autoModel, autoBench, autoOcr, threadsOverride) {
                             if (!autoModel.isNullOrBlank()) {
                                 vm.selectModel(autoModel)
                                 withTimeoutOrNull(20_000) {
                                     while (vm.state.value.modelId != autoModel) delay(200)
                                 }
                             }
-                            if (!vm.state.value.engineReady) {
+                            // OCR 先跑：它不依赖模型，纯 ML Kit
+                            if (!autoOcr.isNullOrBlank()) {
+                                vm.importImage(android.net.Uri.fromFile(java.io.File(autoOcr)))
+                                withTimeoutOrNull(40_000) {
+                                    while (vm.state.value.draft.isBlank() &&
+                                        vm.state.value.error == null
+                                    ) {
+                                        delay(300)
+                                    }
+                                }
+                            }
+                            if (!vm.state.value.engineReady && autoBench == "1") {
+                                vm.loadModel(threadsOverride.takeIf { it > 0 })
+                            }
+                            if (!vm.state.value.engineReady && !autoPrompt.isNullOrBlank()) {
                                 vm.loadModel(threadsOverride.takeIf { it > 0 })
                             }
                             withTimeoutOrNull(120_000) {
-                                while (!vm.state.value.engineReady) delay(300)
+                                while (!vm.state.value.engineReady &&
+                                    !autoPrompt.isNullOrBlank()
+                                ) {
+                                    delay(300)
+                                }
                             }
                             when {
                                 autoBench == "1" -> {
@@ -98,7 +117,17 @@ class MainActivity : ComponentActivity() {
                                         while (vm.state.value.benchmark == null) delay(1000)
                                     }
                                 }
-                                !autoPrompt.isNullOrBlank() -> vm.send(autoPrompt)
+                                !autoPrompt.isNullOrBlank() -> {
+                                    // 有 OCR 结果时，问题必须拼在后面。
+                                    // 只发 OCR 原文的话，模型收到一堆没有问题的文字，会开始编。
+                                    val ocrText = vm.state.value.draft
+                                    val prompt = when {
+                                        ocrText.isBlank() -> autoPrompt
+                                        else -> "$ocrText\n\n$autoPrompt"
+                                    }
+                                    vm.send(prompt)
+                                    vm.setDraft("")
+                                }
                             }
                         }
                     }
@@ -119,5 +148,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_AUTOMODEL = "automodel"
         const val EXTRA_AUTOBENCH = "autobench"
         const val EXTRA_THREADS = "threads"
+        /** 直接从文件路径跑 OCR，绕过文件选择器（SAF 没法自动化） */
+        const val EXTRA_AUTOOCR = "autoocr"
     }
 }

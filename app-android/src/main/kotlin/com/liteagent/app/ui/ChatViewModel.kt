@@ -72,7 +72,11 @@ data class ChatUiState(
     /** 仅检索模式：不调用模型，直接返回原文段落。模型跑不动时的兜底。 */
     val retrievalOnly: Boolean = false,
     /** 实际加载时用的线程数。跑分要按这个值记录，不能用推荐值——调优实验时两者会不一致 */
-    val loadedThreads: Int = 0
+    val loadedThreads: Int = 0,
+    /** 输入框内容提升到 VM：OCR 识别完要能回填，UI 本地状态做不到 */
+    val draft: String = "",
+    /** 图片识别中 */
+    val ocrRunning: Boolean = false
 )
 
 /**
@@ -113,6 +117,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val documentStore = DocumentStore(app)
     private val ragEngine = RagEngine()
     private val sessionStore = SessionStore(app)
+    private val imageTextExtractor = com.liteagent.app.vision.ImageTextExtractor()
 
     /** 用户手动选的模型要记住。不记的话每次重启都退回推荐档，等于白选。 */
     private val prefs = app.getSharedPreferences("liteagent", android.content.Context.MODE_PRIVATE)
@@ -537,6 +542,48 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(error = null) }
     }
 
+    fun setDraft(text: String) {
+        _state.update { it.copy(draft = text) }
+    }
+
+    /**
+     * 选一张图 → OCR → 把文字填进输入框。
+     *
+     * 填输入框而不是直接发送：OCR 会认错字（尤其手写和表格），
+     * 让用户看一眼再发，比替他去问更靠谱。
+     */
+    fun importImage(uri: android.net.Uri) {
+        if (_state.value.ocrRunning) return
+        _state.update { it.copy(ocrRunning = true, error = null) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                imageTextExtractor.extract(getApplication(), uri)
+            }
+            result.fold(
+                onSuccess = { text ->
+                    val existing = _state.value.draft
+                    val merged = buildString {
+                        if (existing.isNotBlank()) {
+                            append(existing.trim())
+                            append("\n\n")
+                        }
+                        append("图片里的文字：\n")
+                        append(text.take(MAX_OCR_CHARS))
+                        if (text.length > MAX_OCR_CHARS) append("\n…（已截断）")
+                    }
+                    _state.update {
+                        it.copy(ocrRunning = false, draft = merged, error = null)
+                    }
+                },
+                onFailure = { err ->
+                    _state.update { s ->
+                        s.copy(ocrRunning = false, error = "图片识别失败：${err.message}")
+                    }
+                }
+            )
+        }
+    }
+
     fun clearChat() {
         engine.reset()
         _state.update { it.copy(messages = emptyList(), perf = null) }
@@ -674,5 +721,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
          * 192 大约是 2-3 句话，既够用又不会等到崩。
          */
         const val MAX_TOKENS_EXTREME = 192
+
+        /** OCR 结果的上限。一张 A4 满页中文约 1500 字，2000 够用；再多会把上下文吃光 */
+        const val MAX_OCR_CHARS = 2000
     }
 }
