@@ -77,13 +77,16 @@ class MainActivity : ComponentActivity() {
                     val autoOcr = intent?.getStringExtra(EXTRA_AUTOOCR)
                     val threadsOverride = intent?.getIntExtra(EXTRA_THREADS, 0) ?: 0
                     val reuseKv = intent?.getIntExtra(EXTRA_REUSEKV, 0) == 1
+                    // 1 表示只走检索（不加载模型），用来验证 buildExtractiveAnswer 这条路径
+                    val retrievalOnly = intent?.getIntExtra(EXTRA_RETRIEVAL_ONLY, 0) == 1
                     val hasAuto = !autoPrompt.isNullOrBlank() || !autoModel.isNullOrBlank() ||
                         autoBench == "1" || !autoOcr.isNullOrBlank()
                     if (hasAuto && savedInstanceState == null) {
                         LaunchedEffect(
                             autoPrompt, autoModel, autoBench, autoOcr,
-                            threadsOverride, reuseKv
+                            threadsOverride, reuseKv, retrievalOnly
                         ) {
+                            if (retrievalOnly) vm.toggleRetrievalOnly(true)
                             if (!autoModel.isNullOrBlank()) {
                                 vm.selectModel(autoModel)
                                 withTimeoutOrNull(20_000) {
@@ -104,11 +107,17 @@ class MainActivity : ComponentActivity() {
                             if (!vm.state.value.engineReady && autoBench == "1") {
                                 vm.loadModel(threadsOverride.takeIf { it > 0 }, reuseKv)
                             }
-                            if (!vm.state.value.engineReady && !autoPrompt.isNullOrBlank()) {
+                            // 仅检索模式不需要模型，别白等 5 秒加载
+                            if (!vm.state.value.engineReady && !autoPrompt.isNullOrBlank() &&
+                                !retrievalOnly
+                            ) {
                                 vm.loadModel(threadsOverride.takeIf { it > 0 }, reuseKv)
                             }
+                            // 仅检索模式等不到 engineReady（它压根不加载模型），
+                            // 条件里必须带上 retrievalOnly，否则会白等满 120 秒
                             withTimeoutOrNull(120_000) {
                                 while (!vm.state.value.engineReady &&
+                                    !vm.state.value.retrievalOnly &&
                                     !autoPrompt.isNullOrBlank()
                                 ) {
                                     delay(300)
@@ -174,5 +183,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_AUTOOCR = "autoocr"
         /** 1 表示开启 reuse_kv，测多轮 prefill 复用 */
         const val EXTRA_REUSEKV = "reusekv"
+        /** 1 表示只走检索、不加载模型，验证抽取式回答 */
+        const val EXTRA_RETRIEVAL_ONLY = "retrievalonly"
     }
 }
