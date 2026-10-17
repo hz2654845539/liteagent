@@ -58,14 +58,16 @@ class LlmEngine {
     }
 
     /**
-     * 流式生成。
+     * 流式生成（多轮）。
      *
      * 内部实现：先做一次 prefill（不产出 token），再逐 token 解码。
      * 这样每个 token 之间都能检查停止标志，点"停止"后最坏延迟是一个 token 的解码时间。
+     *
+     * @param messages [(role, content)]，按时间顺序。MNN 会按模型自带的
+     *   prompt_template 逐条套成 <|im_start|>role\ncontent<|im_end|>。
      */
     fun generate(
-        prompt: String,
-        systemPrompt: String = "",
+        messages: List<Pair<String, String>>,
         maxTokens: Int = 512
     ): Flow<String> = callbackFlow {
         val h = handle
@@ -75,10 +77,12 @@ class LlmEngine {
         }
 
         val stopRequested = AtomicBoolean(false)
+        val roles = messages.map { it.first }.toTypedArray()
+        val contents = messages.map { it.second }.toTypedArray()
 
         val worker = launch(Dispatchers.IO) {
             try {
-                nativeGenerate(h, prompt, systemPrompt, maxTokens, TokenCallback { text ->
+                nativeGenerate(h, roles, contents, maxTokens, TokenCallback { text ->
                     trySend(text)
                     // 返回 true = 让 C++ 侧退出解码循环
                     stopRequested.get()
@@ -94,6 +98,19 @@ class LlmEngine {
             worker.cancel()
         }
     }.buffer(Channel.UNLIMITED)
+
+    /** 单轮快捷方式，内部转成只有 system + user 的两条 messages */
+    fun generate(
+        prompt: String,
+        systemPrompt: String = "",
+        maxTokens: Int = 512
+    ): Flow<String> = generate(
+        buildList {
+            if (systemPrompt.isNotBlank()) add("system" to systemPrompt)
+            add("user" to prompt)
+        },
+        maxTokens
+    )
 
     /** 主动停止当前生成。可以从主线程调用。 */
     fun stop() {
@@ -131,8 +148,8 @@ class LlmEngine {
     private external fun nativeCreate(configPath: String, configJson: String): Long
     private external fun nativeGenerate(
         handle: Long,
-        prompt: String,
-        systemPrompt: String,
+        roles: Array<String>,
+        contents: Array<String>,
         maxTokens: Int,
         callback: TokenCallback
     ): Int

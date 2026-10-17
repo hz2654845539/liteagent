@@ -286,8 +286,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** threadsOverride 只给调优实验用：覆盖推荐规则里的线程数，其他参数照旧 */
-    fun loadModel(threadsOverride: Int? = null) {
+    /**
+     * threadsOverride / reuseKv 只给实验用：覆盖推荐规则里的线程数和 KV 复用开关。
+     *
+     * reuse_kv 默认 false，意味着每轮对话都要把 system + 全部历史重新 prefill 一遍。
+     * 手机上这是最贵的一笔开销（prefill 15 t/s，1000 字要 60 秒）。
+     */
+    fun loadModel(threadsOverride: Int? = null, reuseKv: Boolean = false) {
         val e = currentEntry ?: return
         if (!store.isReady(e)) {
             _state.update { it.copy(error = "模型文件不完整，请先下载") }
@@ -303,6 +308,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 append("\"thread_num\":").append(threads).append(",")
                 append("\"precision\":\"low\",")
                 append("\"memory\":\"low\"")
+                if (reuseKv) {
+                    // 把 KV cache 复用打开：多轮对话只 prefill 新增部分
+                    append(",\"reuse_kv\":true")
+                }
                 append("}")
             }
             // nativeCreate + Llm::load() 是同步阻塞的 JNI 调用，加载 531MB 权重在手机上
@@ -376,7 +385,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 MAX_TOKENS
             }
-            val firstPass = generateInto(prepared.prompt, prepared.system, assistantId, budget = budget)
+            val firstPass = generateInto(
+                buildMessages(prepared.system, prepared.prompt),
+                assistantId,
+                budget = budget
+            )
             val call = ToolCallParser.parse(firstPass)
 
             if (call != null) {
@@ -400,9 +413,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 val followUp = "用户说：$content\n工具执行结果：$feedback\n请用一句中文告诉用户结果。"
+                // 工具回灌这一轮不带历史：第一轮吐的 JSON 还在上下文里，
+                // 带着它模型很容易继续吐 JSON 而不是用人话总结
                 generateInto(
-                    followUp,
-                    PresetStore.find(_state.value.presetId).systemPrompt,
+                    listOf(
+                        "system" to PresetStore.find(_state.value.presetId).systemPrompt,
+                        "user" to followUp
+                    ),
                     assistantId,
                     reset = true
                 )
@@ -427,6 +444,51 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * 检索没命中时**不拼资料**——宁可当普通对话，也不要把无关片段塞进上下文，
      * 那既浪费 prefill（手机上很贵），又会诱导模型硬套资料。
      */
+    /**
+     * 组装发给模型的消息序列。
+     *
+     * 之前只发 system + 当前问题，导致多轮指代完全失效——用户说"再说一遍要点"，
+     * 模型看不到上一轮说过什么，只能瞎猜。界面上看起来是多轮对话，实际每轮都是孤立的。
+     *
+     * 加历史要付 prefill 代价（这台设备 15 tok/s，多 300 字就多 20 秒），
+     * 所以按字符预算从最近往前取，超了就丢最早的。
+     */
+    private fun buildMessages(
+        system: String,
+        currentPrompt: String,
+        charBudget: Int = HISTORY_CHAR_BUDGET
+    ): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
+        if (system.isNotBlank()) result.add("system" to system)
+
+        val all = _state.value.messages
+        // 尾部有一条空的 assistant 占位（等流式填充），先剥掉；
+        // 再去掉最后一条用户消息——它就是 currentPrompt，下面会重新加，不然会发两遍
+        val trimmed = all.dropLastWhile { it.content.isBlank() }
+        val lastUserIdx = trimmed.indexOfLast { it.role == com.liteagent.shared.ChatRole.USER }
+        val history = trimmed.filterIndexed { idx, msg ->
+            idx != lastUserIdx && msg.content.isNotBlank()
+        }
+
+        val picked = ArrayDeque<Pair<String, String>>()
+        var used = 0
+        for (msg in history.asReversed()) {
+            if (msg.content.isBlank()) continue
+            if (used + msg.content.length > charBudget) break
+            // MNN 的 prompt_template 认的是小写 role 名
+            picked.addFirst(msg.role.name.lowercase() to msg.content)
+            used += msg.content.length
+        }
+        result.addAll(picked)
+        result.add("user" to currentPrompt)
+        android.util.Log.i(
+            "MultiTurn",
+            "buildMessages size=${result.size} " +
+                "detail=${result.joinToString(",") { "${it.first}:${it.second.length}" }}"
+        )
+        return result
+    }
+
     private suspend fun preparePrompt(input: String): PreparedPrompt {
         val preset = PresetStore.find(_state.value.presetId)
         // 极限档（0.5B）不注入工具 schema：实测它会照着里面的示例逐行复述，
@@ -466,15 +528,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      *              留在历史里，模型很容易继续吐 JSON。
      */
     private suspend fun generateInto(
-        prompt: String,
-        systemPrompt: String,
+        messages: List<Pair<String, String>>,
         assistantId: String,
         reset: Boolean = false,
         budget: Int = MAX_TOKENS
     ): String {
         if (reset) engine.reset()
         val buffer = StringBuilder()
-        engine.generate(prompt, systemPrompt, budget)
+        engine.generate(messages, budget)
             .catch { t ->
                 _state.update { s -> s.copy(error = t.message ?: "生成失败") }
             }
@@ -724,5 +785,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         /** OCR 结果的上限。一张 A4 满页中文约 1500 字，2000 够用；再多会把上下文吃光 */
         const val MAX_OCR_CHARS = 2000
+
+        /**
+         * 历史消息的字符预算。
+         *
+         * 极限档上下文只有 1K token（约 700 汉字），system + 资料 + 回答已经占掉大半。
+         * 600 字的历史大约 400 token，是"能记住上一轮、又不至于把 prefill 拖爆"的折中。
+         * 真机数据：这台设备 prefill 15 tok/s，400 token 约 27 秒——所以历史不是免费的。
+         */
+        const val HISTORY_CHAR_BUDGET = 600
     }
 }

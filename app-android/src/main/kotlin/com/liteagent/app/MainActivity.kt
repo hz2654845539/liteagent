@@ -76,10 +76,14 @@ class MainActivity : ComponentActivity() {
                     val autoBench = intent?.getStringExtra(EXTRA_AUTOBENCH)
                     val autoOcr = intent?.getStringExtra(EXTRA_AUTOOCR)
                     val threadsOverride = intent?.getIntExtra(EXTRA_THREADS, 0) ?: 0
+                    val reuseKv = intent?.getIntExtra(EXTRA_REUSEKV, 0) == 1
                     val hasAuto = !autoPrompt.isNullOrBlank() || !autoModel.isNullOrBlank() ||
                         autoBench == "1" || !autoOcr.isNullOrBlank()
                     if (hasAuto && savedInstanceState == null) {
-                        LaunchedEffect(autoPrompt, autoModel, autoBench, autoOcr, threadsOverride) {
+                        LaunchedEffect(
+                            autoPrompt, autoModel, autoBench, autoOcr,
+                            threadsOverride, reuseKv
+                        ) {
                             if (!autoModel.isNullOrBlank()) {
                                 vm.selectModel(autoModel)
                                 withTimeoutOrNull(20_000) {
@@ -98,10 +102,10 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             if (!vm.state.value.engineReady && autoBench == "1") {
-                                vm.loadModel(threadsOverride.takeIf { it > 0 })
+                                vm.loadModel(threadsOverride.takeIf { it > 0 }, reuseKv)
                             }
                             if (!vm.state.value.engineReady && !autoPrompt.isNullOrBlank()) {
-                                vm.loadModel(threadsOverride.takeIf { it > 0 })
+                                vm.loadModel(threadsOverride.takeIf { it > 0 }, reuseKv)
                             }
                             withTimeoutOrNull(120_000) {
                                 while (!vm.state.value.engineReady &&
@@ -118,14 +122,32 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 !autoPrompt.isNullOrBlank() -> {
-                                    // 有 OCR 结果时，问题必须拼在后面。
-                                    // 只发 OCR 原文的话，模型收到一堆没有问题的文字，会开始编。
+                                    // 用 ";;" 分隔连发多轮。不能用 "|"：
+                                    // adb shell 会把参数交给设备 shell 重新解析，引号丢失后
+                                    // "|" 变成管道符，am 只收到第一个参数。
+                                    val turns = autoPrompt.split("@@").map { it.trim() }
+                                        .filter { it.isNotEmpty() }
                                     val ocrText = vm.state.value.draft
-                                    val prompt = when {
-                                        ocrText.isBlank() -> autoPrompt
-                                        else -> "$ocrText\n\n$autoPrompt"
+                                    turns.forEachIndexed { idx, question ->
+                                        val prompt = if (idx == 0 && ocrText.isNotBlank()) {
+                                            "$ocrText\n\n$question"
+                                        } else {
+                                            question
+                                        }
+                                        vm.send(prompt)
+                                        delay(300)
+                                        withTimeoutOrNull(240_000) {
+                                            while (vm.state.value.generating) delay(300)
+                                        }
+                                        vm.state.value.perf?.let { pf ->
+                                            android.util.Log.i(
+                                                "MultiTurn",
+                                                "turn=${idx + 1} ttft=${pf.ttftMs}ms " +
+                                                    "prefill=${pf.prefillTps}tps " +
+                                                    "decode=${pf.decodeTps}tps"
+                                            )
+                                        }
                                     }
-                                    vm.send(prompt)
                                     vm.setDraft("")
                                 }
                             }
@@ -150,5 +172,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_THREADS = "threads"
         /** 直接从文件路径跑 OCR，绕过文件选择器（SAF 没法自动化） */
         const val EXTRA_AUTOOCR = "autoocr"
+        /** 1 表示开启 reuse_kv，测多轮 prefill 复用 */
+        const val EXTRA_REUSEKV = "reusekv"
     }
 }

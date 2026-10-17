@@ -238,6 +238,7 @@ GPU 判断：GLES ≥ 3.0 且 GL_RENDERER 命中 Adreno/Mali/Immortalis 前缀�
 | [`docs/06-prompt-engineering.md`](docs/06-prompt-engineering.md) | **Prompt 工程**：项目里五类提示词的设计与迭代记录 |
 | [`docs/07-framework-survey.md`](docs/07-framework-survey.md) | **框架技术预研**：MNN / llama.cpp / ExecuTorch / LiteRT / ORT 横向对比 |
 | [`docs/08-image-input.md`](docs/08-image-input.md) | **图像输入**：JD 依据、为什么选 OCR 不选 VLM、无 GMS 实测、两个真问题 |
+| [`docs/09-multiturn.md`](docs/09-multiturn.md) | **多轮对话**：实验挖出「没带历史」和「问题发两遍」两个真 bug |
 | [`docs/02-performance.md`](docs/02-performance.md) | 包体积实测（24MB → 8.4MB）、启动路径、R8 两个坑 |
 | [`docs/adr/`](docs/adr/README.md) | 5 篇架构决策记录，每篇含"放弃了什么" |
 | [`docs/vibe/`](docs/vibe/README.md) | 5 个真实 AI 协作案例（全是失败案例）|

@@ -215,18 +215,28 @@ Java_com_liteagent_app_engine_LlmEngine_nativeCreate(JNIEnv* env, jobject /*thiz
 }
 
 /**
- * 流式生成。
+ * 流式生成（多轮）。
+ *
+ * roles / contents 两个等长数组，按顺序构成对话历史。
+ * 为什么不用单个字符串：MNN 的 ChatMessages 会按模型自带的 prompt_template
+ * 逐条套 <|im_start|>role\ncontent<|im_end|>。自己在 Kotlin 侧拼成一整段，
+ * 模型看到的就是"一条超长用户消息"，多轮指代（"再说一遍"）照样失效。
+ *
  * @return 实际生成的 token 数；-1 表示 handle 无效
  * 回调接口：boolean onToken(String text)，返回 true 表示请求停止。
  */
 JNIEXPORT jint JNICALL
 Java_com_liteagent_app_engine_LlmEngine_nativeGenerate(JNIEnv* env, jobject /*thiz*/,
-                                                       jlong handle, jstring prompt,
-                                                       jstring systemPrompt, jint maxTokens,
+                                                       jlong handle, jobjectArray roles,
+                                                       jobjectArray contents, jint maxTokens,
                                                        jobject callback) {
     Session* s = asSession(handle);
     if (s == nullptr || s->llm == nullptr) return -1;
     if (callback == nullptr) return -2;
+    if (roles == nullptr || contents == nullptr) return -2;
+
+    const jsize count = env->GetArrayLength(roles);
+    if (count <= 0 || env->GetArrayLength(contents) != count) return -2;
 
     s->stop.store(false);
 
@@ -245,9 +255,14 @@ Java_com_liteagent_app_engine_LlmEngine_nativeGenerate(JNIEnv* env, jobject /*th
     std::ostream os(&sink);
 
     ChatMessages messages;
-    const std::string system = jstr(env, systemPrompt);
-    if (!system.empty()) messages.emplace_back("system", system);
-    messages.emplace_back("user", jstr(env, prompt));
+    messages.reserve(static_cast<size_t>(count));
+    for (jsize i = 0; i < count; ++i) {
+        auto role = static_cast<jstring>(env->GetObjectArrayElement(roles, i));
+        auto content = static_cast<jstring>(env->GetObjectArrayElement(contents, i));
+        messages.emplace_back(jstr(env, role), jstr(env, content));
+        if (role != nullptr) env->DeleteLocalRef(role);
+        if (content != nullptr) env->DeleteLocalRef(content);
+    }
 
     // 第一步：只做 prefill（max_new_tokens = 0），让 KV cache 就绪
     s->llm->response(messages, &os, kEndMarker, 0);
