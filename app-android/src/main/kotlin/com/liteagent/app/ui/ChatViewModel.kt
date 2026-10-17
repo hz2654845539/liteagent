@@ -452,98 +452,31 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 组装「这次要发给模型的消息」。
      *
-     * ───────────────────────────────────────────────────────────────
-     * 【它在干什么】
+     * 真正的拼装在 [MessageAssembler.assemble]——那边是可单测的纯函数。
+     * 这里只负责从 ViewModel 状态里取数据喂进去。
      *
-     * 模型本身不记事。它每回答一次，你都得把「该让它看到的东西」重新交一遍。
-     * 这个函数就是决定：这次到底给它看哪些内容、按什么顺序。
-     *
-     * 用户第 3 次提问时，实际发出去的列表长这样：
-     *
-     *   system    : 你是一个运行在手机本地的 AI 助理……     ← 人格设定，每次都带
-     *   assistant : 之前对话的摘要：用户在问端侧推理……      ← 早期对话压成的一句话
-     *   user      : 用一句话说明什么是 MNN                  ← 最近一轮的问答
-     *   assistant : MNN 是阿里开源的推理框架……
-     *   user      : 那它和 llama.cpp 比呢？                 ← 这次要问的
-     *
-     * ───────────────────────────────────────────────────────────────
-     * 【为什么不能把全部聊天记录塞进去】
-     *
-     * 模型每读一个字都要花时间，这一步叫 prefill（预填充）。
-     * 这台设备每秒只能读 25 个字，塞 600 字就要等 24 秒才吐出第一个字。
-     *
-     * 实测（DNAKE v911 / 2GB 内存 / Qwen2.5-0.5B）：
-     *   不带历史        → 1.8 秒出第一个字
-     *   带 600 字历史   → 17.0 秒出第一个字
-     *
-     * 所以历史必须设上限。超出的部分不扔掉，而是压成摘要，见 [maybeCompactHistory]。
-     *
-     * @param system        人格设定 + 工具说明，每次都带
-     * @param currentPrompt 用户这次问的话（可能已被 RAG 加工过，前面拼了检索到的资料）
-     * @param charBudget    历史部分最多带多少字，默认 300
-     * @return (角色, 内容) 的列表，直接交给 [LlmEngine.generate]
+     * 详细说明（为什么要带历史、为什么不能全带）见 MessageAssembler 的注释。
      */
     private fun buildMessages(
         system: String,
         currentPrompt: String,
         charBudget: Int = HISTORY_CHAR_BUDGET
     ): List<Pair<String, String>> {
-        val result = mutableListOf<Pair<String, String>>()
-
-        // 第一条永远是 system：告诉模型"你是谁、该怎么说话"
-        if (system.isNotBlank()) result.add("system" to system)
-
         val session = currentSession
+        val all = _state.value.messages
+        val currentUser = all.dropLastWhile { it.content.isBlank() }
+            .lastOrNull { it.role == com.liteagent.shared.ChatRole.USER }
 
-        // 早期对话已经被压缩过的话，这里补一句摘要，
-        // 让模型知道自己"记得"开头聊过什么（界面上那些消息仍然在，只是不重发了）
-        val covered = session?.summarizedCount ?: 0
-        val summary = session?.summary.orEmpty()
-        if (summary.isNotBlank()) {
-            result.add("assistant" to "之前对话的摘要：$summary")
-        }
+        val result = MessageAssembler.assemble(
+            system = system,
+            messages = all,
+            currentPrompt = currentPrompt,
+            summary = session?.summary.orEmpty(),
+            summarizedCount = session?.summarizedCount ?: 0,
+            charBudget = charBudget,
+            lastUserId = currentUser?.id
+        )
 
-        val all = _state.value.messages.drop(covered)
-
-        // 两个"清理"动作，都是踩过坑才加的：
-        // 1) dropLastWhile —— 消息列表末尾有一条内容为空的 assistant 占位消息，
-        //    它是流式输出用的容器，现在还没内容，发给模型是噪音。
-        // 2) 去掉最后一条用户消息 —— 它就是 currentPrompt 本身，
-        //    下面会重新加一次。不去掉的话，同一个问题会被发两遍
-        //    （模型会看到两条一模一样的问句，然后开始胡言乱语）。
-        val trimmed = all.dropLastWhile { it.content.isBlank() }
-        val lastUserIdx = trimmed.indexOfLast { it.role == com.liteagent.shared.ChatRole.USER }
-        val history = trimmed.filterIndexed { idx, msg ->
-            idx != lastUserIdx && msg.content.isNotBlank()
-        }
-
-        // 从最近的消息往前挑，直到把预算用完为止。
-        // 为什么从近往远：越近的内容越相关，用户说"再改一下"指的是刚说的那段。
-        // ArrayDeque.addFirst 是为了保持时间顺序（从后往前挑，但要正着放回去）。
-        val picked = ArrayDeque<Pair<String, String>>()
-        var used = 0
-        for (msg in history.asReversed()) {
-            if (msg.content.isBlank()) continue
-            val remaining = charBudget - used
-            if (remaining <= 0) break
-
-            // 单条就超预算时必须截断，不能整条丢掉。
-            // 踩过的坑：0.5B 一轮回答常有 600+ 字，如果这里直接 break，
-            // 就变成"一条历史都带不上"——用户问"刚才那个"，模型完全不知道指什么。
-            // 截断保留末尾：回答的结论通常在最后，开头多是铺垫。
-            val text = if (msg.content.length > remaining) {
-                msg.content.takeLast(remaining)
-            } else {
-                msg.content
-            }
-            // 角色名必须是 MNN 认识的小写：system / user / assistant
-            picked.addFirst(msg.role.name.lowercase() to text)
-            used += text.length
-        }
-        result.addAll(picked)
-
-        // 最后一条是这次的问题。放最后是因为对话的顺序就是"说完上文说下文"
-        result.add("user" to currentPrompt)
         android.util.Log.i(
             "MultiTurn",
             "buildMessages size=${result.size} " +
