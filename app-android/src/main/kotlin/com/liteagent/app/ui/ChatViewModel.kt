@@ -170,7 +170,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val session = sessionStore.list().firstOrNull()
                     ?.let { sessionStore.load(it.id) }
                     ?: sessionStore.create()
-                currentSession = session
+                // 崩溃恢复：生成中进程被杀，尾部会留下空的 assistant 占位。
+                // 过滤掉它，用户打的问题和已完成的轮次都保留。
+                // （踩过的坑：不 persist 中间状态的话，崩溃会连用户的问题一起丢）
+                val restored = session.copy(
+                    messages = session.messages.filter {
+                        !(it.role == ChatRole.ASSISTANT && it.content.isBlank())
+                    }
+                )
+                currentSession = restored
 
                 BootstrapSnapshot(
                     profile = p,
@@ -178,7 +186,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     modelDownloaded = chosen != null && store.isReady(chosen),
                     documents = documentStore.listDocs(),
                     entry = chosen,
-                    session = session,
+                    session = restored,
                     sessions = sessionStore.list()
                 )
             }
@@ -370,6 +378,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 error = null
             )
         }
+
+        // 立即落盘一次。生成中途崩溃的话，用户打的问题至少还在——
+        // 实测踩过的坑：只在 send 结束时落盘，崩溃会连用户的问题一起丢
+        persistSession()
 
         viewModelScope.launch {
             try {
@@ -842,7 +854,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             currentSession = session
             _state.update {
                 it.copy(
-                    messages = session.messages,
+                    // 和启动恢复同一规则：过滤掉崩溃残留的空 assistant 占位
+                    messages = session.messages.filter {
+                        !(it.role == ChatRole.ASSISTANT && it.content.isBlank())
+                    },
                     currentSessionId = session.id,
                     presetId = session.presetId,
                     perf = null,
