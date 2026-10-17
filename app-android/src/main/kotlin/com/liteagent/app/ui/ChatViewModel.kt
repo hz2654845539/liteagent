@@ -31,6 +31,7 @@ import com.liteagent.app.tool.ToolSpec
 import com.liteagent.shared.ChatMessage
 import com.liteagent.shared.ChatRole
 import com.liteagent.shared.DeviceProfile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -371,87 +372,109 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         viewModelScope.launch {
-            // 仅检索模式：不碰模型，直接把命中的原文段落拼出来
-            if (_state.value.retrievalOnly) {
-                val hits = withContext(Dispatchers.IO) { ragEngine.retrieve(content) }
-                val answer = ragEngine.buildExtractiveAnswer(content, hits)
+            try {
+                runSendPipeline(content, assistantId)
+            } catch (e: CancellationException) {
+                // ViewModel 清理导致的协程取消，原样上抛让协程正常结束，不能吞
+                throw e
+            } catch (e: Exception) {
+                // 任何一步出错都要让用户看到，并且绝不能把 generating 卡在 true——
+                // 否则发送按钮永久变「停止」，这个会话就废了（真机踩过的坑）
                 _state.update { s ->
-                    s.copy(
-                        messages = s.messages.map {
-                            if (it.id == assistantId) it.copy(content = answer) else it
-                        },
-                        generating = false
-                    )
+                    s.copy(error = "生成失败：${e.message ?: "未知错误"}")
                 }
-                attachCitations(assistantId, answer, hits)
-                persistSession()
-                return@launch
+            } finally {
+                _state.update { s -> s.copy(generating = false) }
             }
-
-            // 技能匹配 + 文档检索都在 IO 上做，其中检索要走一遍全部块的打分
-            // 历史超预算时先把早期对话压成摘要。只在引擎就绪时做——仅检索模式不需要模型
-            if (_state.value.engineReady) {
-                maybeCompactHistory()
-            }
-
-            val prepared = withContext(Dispatchers.IO) {
-                preparePrompt(content, skipRag = _state.value.imageAttached)
-            }
-
-            // 第一轮：带上工具 schema，模型可能直接回答，也可能吐一个 JSON 调用
-            val budget = if (_state.value.recommendation is Recommendation.Restricted) {
-                MAX_TOKENS_EXTREME
-            } else {
-                MAX_TOKENS
-            }
-            val firstPass = generateInto(
-                buildMessages(prepared.system, prepared.prompt),
-                assistantId,
-                budget = budget
-            )
-            val call = ToolCallParser.parse(firstPass)
-
-            if (call != null) {
-                _state.update { s ->
-                    s.copy(
-                        messages = s.messages.map {
-                            if (it.id == assistantId) it.copy(content = "正在调用 ${call.tool}…") else it
-                        }
-                    )
-                }
-
-                // 工具执行是磁盘/系统调用，不能在 Main 线程
-                val feedback = withContext(Dispatchers.IO) { toolRouter.execute(call) }
-
-                // 第二轮：把执行结果回灌，让模型用人话总结
-                _state.update { s ->
-                    s.copy(
-                        messages = s.messages.map {
-                            if (it.id == assistantId) it.copy(content = "") else it
-                        }
-                    )
-                }
-                val followUp = "用户说：$content\n工具执行结果：$feedback\n请用一句中文告诉用户结果。"
-                // 工具回灌这一轮不带历史：第一轮吐的 JSON 还在上下文里，
-                // 带着它模型很容易继续吐 JSON 而不是用人话总结
-                generateInto(
-                    listOf(
-                        "system" to PresetStore.find(_state.value.presetId).systemPrompt,
-                        "user" to followUp
-                    ),
-                    assistantId,
-                    reset = true
-                )
-            } else if (prepared.hits.isNotEmpty()) {
-                attachCitations(assistantId, firstPass, prepared.hits)
-            }
-
-            // 这次用完了，"附带图片"的标记要清掉，否则下一条普通问题也会跳过检索
-            _state.update {
-                it.copy(generating = false, perf = engine.perf(), imageAttached = false)
-            }
-            persistSession()
         }
+    }
+
+    /**
+     * send 的完整流水线。单独抽出来是为了让外层的 try/finally 能兜住一切异常——
+     * 之前没有这层保护，检索、工具执行、文件写入任何一处抛错，
+     * generating 就永久卡死，整个会话没法再发消息。
+     */
+    private suspend fun runSendPipeline(content: String, assistantId: String) {
+        // 仅检索模式：不碰模型，直接把命中的原文段落拼出来
+        if (_state.value.retrievalOnly) {
+            val hits = withContext(Dispatchers.IO) { ragEngine.retrieve(content) }
+            val answer = ragEngine.buildExtractiveAnswer(content, hits)
+            _state.update { s ->
+                s.copy(
+                    messages = s.messages.map {
+                        if (it.id == assistantId) it.copy(content = answer) else it
+                    },
+                    generating = false
+                )
+            }
+            attachCitations(assistantId, answer, hits)
+            persistSession()
+            return
+        }
+
+        // 技能匹配 + 文档检索都在 IO 上做，其中检索要走一遍全部块的打分
+        // 历史超预算时先把早期对话压成摘要。只在引擎就绪时做——仅检索模式不需要模型
+        if (_state.value.engineReady) {
+            maybeCompactHistory()
+        }
+
+        val prepared = withContext(Dispatchers.IO) {
+            preparePrompt(content, skipRag = _state.value.imageAttached)
+        }
+
+        // 第一轮：带上工具 schema，模型可能直接回答，也可能吐一个 JSON 调用
+        val budget = if (_state.value.recommendation is Recommendation.Restricted) {
+            MAX_TOKENS_EXTREME
+        } else {
+            MAX_TOKENS
+        }
+        val firstPass = generateInto(
+            buildMessages(prepared.system, prepared.prompt),
+            assistantId,
+            budget = budget
+        )
+        val call = ToolCallParser.parse(firstPass)
+
+        if (call != null) {
+            _state.update { s ->
+                s.copy(
+                    messages = s.messages.map {
+                        if (it.id == assistantId) it.copy(content = "正在调用 ${call.tool}…") else it
+                    }
+                )
+            }
+
+            // 工具执行是磁盘/系统调用，不能在 Main 线程
+            val feedback = withContext(Dispatchers.IO) { toolRouter.execute(call) }
+
+            // 第二轮：把执行结果回灌，让模型用人话总结
+            _state.update { s ->
+                s.copy(
+                    messages = s.messages.map {
+                        if (it.id == assistantId) it.copy(content = "") else it
+                    }
+                )
+            }
+            val followUp = "用户说：$content\n工具执行结果：$feedback\n请用一句中文告诉用户结果。"
+            // 工具回灌这一轮不带历史：第一轮吐的 JSON 还在上下文里，
+            // 带着它模型很容易继续吐 JSON 而不是用人话总结
+            generateInto(
+                listOf(
+                    "system" to PresetStore.find(_state.value.presetId).systemPrompt,
+                    "user" to followUp
+                ),
+                assistantId,
+                reset = true
+            )
+        } else if (prepared.hits.isNotEmpty()) {
+            attachCitations(assistantId, firstPass, prepared.hits)
+        }
+
+        // 这次用完了，"附带图片"的标记要清掉，否则下一条普通问题也会跳过检索
+        _state.update {
+            it.copy(generating = false, perf = engine.perf(), imageAttached = false)
+        }
+        persistSession()
     }
 
     private data class PreparedPrompt(
