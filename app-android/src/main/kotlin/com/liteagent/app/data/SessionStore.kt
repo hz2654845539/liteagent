@@ -25,7 +25,16 @@ data class Session(
     val createdAt: Long,
     val updatedAt: Long,
     val presetId: String = "assistant",
-    val messages: List<ChatMessage> = emptyList()
+    val messages: List<ChatMessage> = emptyList(),
+    /**
+     * 早期对话的摘要。
+     *
+     * 历史按字符预算截断时，超出的部分会被直接丢掉——用户问"第一轮聊了什么"就答不上来。
+     * 摘要用一句话留住事实，比丢掉强，也比留全文便宜（一句话约 30 token，一整轮约 200）。
+     */
+    val summary: String = "",
+    /** 前 N 条消息已经被 [summary] 覆盖，发模型时跳过，但界面上照常显示 */
+    val summarizedCount: Int = 0
 )
 
 /**

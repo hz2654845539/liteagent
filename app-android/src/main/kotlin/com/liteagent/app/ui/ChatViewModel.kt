@@ -377,6 +377,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             // 技能匹配 + 文档检索都在 IO 上做，其中检索要走一遍全部块的打分
+            // 历史超预算时先把早期对话压成摘要。只在引擎就绪时做——仅检索模式不需要模型
+            if (_state.value.engineReady) {
+                maybeCompactHistory()
+            }
+
             val prepared = withContext(Dispatchers.IO) { preparePrompt(content) }
 
             // 第一轮：带上工具 schema，模型可能直接回答，也可能吐一个 JSON 调用
@@ -461,7 +466,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val result = mutableListOf<Pair<String, String>>()
         if (system.isNotBlank()) result.add("system" to system)
 
-        val all = _state.value.messages
+        val session = currentSession
+        // 已经被摘要覆盖的早期消息不再重发，界面上照常显示
+        val covered = session?.summarizedCount ?: 0
+        val summary = session?.summary.orEmpty()
+        if (summary.isNotBlank()) {
+            result.add("assistant" to "之前对话的摘要：$summary")
+        }
+
+        val all = _state.value.messages.drop(covered)
         // 尾部有一条空的 assistant 占位（等流式填充），先剥掉；
         // 再去掉最后一条用户消息——它就是 currentPrompt，下面会重新加，不然会发两遍
         val trimmed = all.dropLastWhile { it.content.isBlank() }
@@ -487,6 +500,59 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 "detail=${result.joinToString(",") { "${it.first}:${it.second.length}" }}"
         )
         return result
+    }
+
+    /**
+     * 把早期对话压成摘要。
+     *
+     * 为什么需要：历史按 300 字截断，超出的直接丢——用户问"第一轮聊了什么"就断片了。
+     * 摘要用一句话留住事实，比丢掉强，也比留全文便宜（一句摘要 ≈30 token，一整轮 ≈200）。
+     *
+     * 触发时机：发送前，只在未摘要部分超出预算时做。用模型自己压（它见过这些内容），
+     * 生成上限压到 [COMPACT_MAX_TOKENS]，这台设备大约 8 秒。
+     *
+     * 不做"后台异步压缩"的原因：压缩和生成抢同一个引擎实例，并发会互相踩状态。
+     * 宁可让用户在这一轮多等 8 秒，也不要在后台制造一个不可复现的竞态。
+     */
+    private suspend fun maybeCompactHistory() {
+        val session = currentSession ?: return
+
+        // 排除当前正在问的那条：它还没被回答，压进摘要会让模型丢掉眼前的问题。
+        // 同时剥掉尾部空的 assistant 占位。
+        val all = _state.value.messages.dropLastWhile { it.content.isBlank() }
+        val currentUser = all.lastOrNull { it.role == com.liteagent.shared.ChatRole.USER }
+        val pending = all.drop(session.summarizedCount)
+            .filter { it.content.isNotBlank() && it.id != currentUser?.id }
+        if (pending.size < 2) return
+
+        val chars = pending.sumOf { it.content.length }
+        if (chars <= COMPACT_TRIGGER_CHARS) return
+
+        // 压掉最早的一半，留一半继续当"近期上下文"
+        val toCompact = pending.take(maxOf(1, pending.size / 2))
+        val dialog = toCompact.joinToString("\n") {
+            "${it.role.name.lowercase()}: ${it.content.take(160)}"
+        }
+        val prompt = "把下面的对话压缩成不超过 50 字的中文摘要，" +
+            "只保留事实和结论，不要评论，不要加前缀：\n$dialog"
+
+        val sb = StringBuilder()
+        engine.generate(prompt, "", COMPACT_MAX_TOKENS).collect { sb.append(it) }
+        val text = sb.toString().trim().replace("\n", " ")
+        if (text.isBlank()) return
+
+        val merged = if (session.summary.isBlank()) text else "${session.summary}；$text"
+        val updated = session.copy(
+            summary = merged.take(COMPACT_SUMMARY_MAX_CHARS),
+            summarizedCount = session.summarizedCount + toCompact.size
+        )
+        currentSession = updated
+        withContext(Dispatchers.IO) { sessionStore.save(updated) }
+        android.util.Log.i(
+            "Compact",
+            "compacted=${toCompact.size} chars=$chars -> summary=${text.length} " +
+                "total_summarized=${updated.summarizedCount}"
+        )
     }
 
     private suspend fun preparePrompt(input: String): PreparedPrompt {
@@ -802,5 +868,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
          * "别让用户等太久"之间的折中。
          */
         const val HISTORY_CHAR_BUDGET = 300
+
+        /** 未摘要部分超过这个字符数就触发压缩。和 HISTORY_CHAR_BUDGET 对齐，超过即压缩 */
+        const val COMPACT_TRIGGER_CHARS = 300
+
+        /** 摘要生成上限。50 字中文约 40 token，给 80 留余量 */
+        const val COMPACT_MAX_TOKENS = 80
+
+        /** 摘要本身的上限，防止多次压缩后无限增长 */
+        const val COMPACT_SUMMARY_MAX_CHARS = 200
     }
 }
