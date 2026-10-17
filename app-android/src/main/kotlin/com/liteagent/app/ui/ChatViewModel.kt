@@ -909,6 +909,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun setPreset(id: String) {
         if (id == _state.value.presetId) return
         _state.update { it.copy(presetId = id) }
+        // 换人格时，旧会话的聊天历史会把小模型带偏（实测：翻译预设下输入
+        // hello world，0.5B 顺着历史继续聊 MNN，完全无视翻译指令）。
+        // 换角色语义上也是新对话的开始，所以有历史就自动开新会话。
+        if (_state.value.messages.isNotEmpty()) {
+            newSession()
+            return
+        }
         viewModelScope.launch {
             // 换人格等于换上下文。KV cache 里还留着旧人格的对话，
             // 不清的话模型会带着"我是翻译"的历史去扮演"资深工程师"，输出会飘
