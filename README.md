@@ -4,7 +4,31 @@
 
 安卓端用 **MNN** 跑量化后的 Qwen2.5，配本地文档检索与设备自适应。技术栈：Kotlin + Compose / MNN(JNI) / KMP 共享契约 / FastAPI，单仓。
 
-> 状态：**开发中**。核心链路（MNN 编译 → JNI → 流式 → 模型管理 → 推荐引擎 → BM25 检索 → 后端）已打通并通过单元测试；真机推理数字待补。
+> 状态：**已通过整夜真机验证**。58 个单元测试全绿；10 项真机验证通过（崩溃恢复 / 多会话 / 导出 / 1.5B 压力 / OCR 边界…）；过程中修复 3 个真 bug，[每个都有故事](docs/12-story.md)。
+
+---
+
+## 真机核心指标（DNAKE v911 · Allwinner A537 · 1950MB · Android 15）
+
+| 指标 | Qwen2.5-0.5B W4 | Qwen2.5-1.5B W4 |
+|---|---|---|
+| 内存（PSS） | 688 MB（可用 692 MB） | 1003–1058 MB，**7 小时多轮无泄漏** |
+| 首 token（UI 实测） | 1.7–9 s | 29–43 s，**随历史增长，多轮不可用** |
+| decode | 7.2 t/s | 3.0 t/s |
+| 上下文 | 1K（极限档，强制 mmap） | 1K |
+| 多轮历史 | 300 字预算 + 摘要压缩 | 不推荐 |
+
+![架构](docs/assets/architecture.svg)
+
+## 演示
+
+| 本地文档问答（引用标注） | OCR 链路（拍照 → 问答） |
+|---|---|
+| ![RAG 引用](docs/assets/rag-with-citations.png) | ![OCR](docs/assets/ocr-chain.png) |
+
+**多轮记忆**：修复后链路已验证（修复前模型复读 48 次，修复后能答出记住的数字，数据见 [docs/09](docs/09-multiturn.md)）。已知局限：0.5B 的记忆能力本身不稳定，3 次同任务仅 1 次答对——诚实记录在 [docs/11](docs/11-overnight-verification.md)。
+
+📖 [代码导览](docs/CODE-MAP.md) · [整夜验证报告](docs/11-overnight-verification.md) · [技术故事：10 个真 bug](docs/12-story.md)
 
 ---
 
@@ -40,10 +64,13 @@
 | 会话管理 | ✅ | 多会话持久化、切换、删除、导出 Markdown |
 | 人格预设 | ✅ | 助理 / 翻译 / 代码 / 总结（借鉴 PocketPal 的 Pals）|
 | **真机推理** | ✅ | DNAKE v911（**1950MB**）跑通 0.5B，decode 3.7 tok/s |
+| **整夜验证** | ✅ | 10 项真机自动化验证（崩溃恢复 / 多会话 / 导出 / 1.5B 压力 / OCR 边界），[报告](docs/11-overnight-verification.md) |
 
 ---
 
 ## 架构
+
+![架构图](docs/assets/architecture.svg)
 
 ```
 app-android/
@@ -139,9 +166,9 @@ jieba 类分词库要带 5MB 词典，APK 体积是硬成本。"量化精度" �
 | APK（debug） | 24 MB | 不含模型 |
 | APK（release + R8） | **8.4 MB** | 其中 `libMNN.so` 7.2MB，占 86% |
 | Qwen2.5-0.5B W4 | 531 MB | 7 个文件，含独立 embedding |
-| 单元测试 | 45 个全绿（客户端）+ 13 个（后端） | 推荐 10 / BM25 6 / RAG 8 / 分块 4 / 工具解析 12 / 技能 5 |
+| 单元测试 | 58 个全绿（客户端）+ 13 个（后端） | 消息组装 8 / 仅检索 3 / 推荐 10 / BM25 6 / RAG 8 / 分块 4 / 工具解析 12 / 技能 5 |
 
-**还没有**首 token 延迟——`ttfa_us` 在我们这条路径上没被填充，待修。
+~~还没有首 token 延迟~~ 已修复：UI 路径的 `ttftMs` 已可用（perf 快照里），下方真机表为 bench 模式数据，UI 对话因含加载/检索与 bench 口径不同。
 
 ### 真机实测（DNAKE v911 · Allwinner A537 · 1950MB · Android 15）
 
@@ -155,6 +182,8 @@ jieba 类分词库要带 5MB 词典，APK 体积是硬成本。"量化精度" �
 | 内存峰值 | **688 MB**（可用 692 MB，99%） |
 | 系统影响 | 加载期间 LMK 杀掉 7 个后台进程，本进程存活 |
 | **release 包** | ✅ 已装机验证（R8 混淆后加载 3976 ms、首 token 2268 ms、decode 5.9 tok/s）|
+
+> 注：上表是 **bench 模式**（prompt 精简、无 RAG 无历史）的口径；真实 UI 对话含 RAG 检索与多轮历史，首 token 1.7–9 s，见第一屏指标表与 [docs/11](docs/11-overnight-verification.md)。
 
 三个结论：
 
@@ -242,6 +271,7 @@ GPU 判断：GLES ≥ 3.0 且 GL_RENDERER 命中 Adreno/Mali/Immortalis 前缀�
 | [`docs/09-multiturn.md`](docs/09-multiturn.md) | **多轮对话**：实验挖出「没带历史」和「问题发两遍」两个真 bug |
 | [`docs/10-context-compaction.md`](docs/10-context-compaction.md) | **上下文压缩**：用摘要代替丢弃，541 字压成 87 字 |
 | [`docs/11-overnight-verification.md`](docs/11-overnight-verification.md) | **整夜验证报告**：10 项通过 / 3 bug 修复 / 3 项无法自动化 |
+| [`docs/12-story.md`](docs/12-story.md) | **技术故事**：10 个真 bug 的排查全过程 + 5 个技术决策 + 面试速查 |
 | [`docs/02-performance.md`](docs/02-performance.md) | 包体积实测（24MB → 8.4MB）、启动路径、R8 两个坑 |
 | [`docs/adr/`](docs/adr/README.md) | 5 篇架构决策记录，每篇含"放弃了什么" |
 | [`docs/vibe/`](docs/vibe/README.md) | 5 个真实 AI 协作案例（全是失败案例）|
