@@ -33,6 +33,22 @@ import androidx.compose.ui.unit.dp
 import java.io.File
 import java.util.Locale
 
+/**
+ * 跑分界面（顶部 Tab 第二个）。
+ *
+ * 【它是干什么的】
+ * 给一个「可量化」的地方：选定模型后，跑一轮标准基准
+ * （固定 prompt、固定 maxTokens），把加载耗时 / 首 token 延迟 /
+ * prefill 与 decode 速度 / 内存峰值展示出来，可一键复制成 JSON。
+ *
+ * 【为什么单独一个页】
+ * 性能数据要和日常聊天分开——聊天页的速度受 RAG 检索、历史长度影响，
+ * 是「真实体验口径」；这里是「纯净口径」，两者数据不能混着比
+ * （README 的真机表里专门标注了口径差异）。
+ *
+ * 注意：跑分前必须先在对话页加载好模型；极限档设备跑 1.5B 会明显偏慢，
+ * 这是预期行为不是 bug（见 docs/11 的 1.5B 压力测试数据）。
+ */
 @Composable
 fun BenchmarkScreen(vm: ChatViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
     val state by vm.state.collectAsState()

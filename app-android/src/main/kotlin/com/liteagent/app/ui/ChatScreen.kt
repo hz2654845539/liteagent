@@ -68,6 +68,23 @@ import com.liteagent.shared.ChatMessage
 import com.liteagent.shared.ChatRole
 import java.util.Locale
 
+/**
+ * 对话界面（主 Tab，第一个被看到的页面）。
+ *
+ * 【它包含什么】
+ * 从上到下：ChatTopBar（预设/会话/导出）→ StatusCard（设备信息 + 模型加载）
+ * → 消息列表（流式渲染、引用标注可点）→ 输入框（OCR 附件提示、仅检索开关）。
+ *
+ * 【和 ChatViewModel 的关系】
+ * 这个文件只做「把 state 画出来 + 把用户动作转成 vm 调用」，
+ * 所有逻辑（发送流水线、历史组装、压缩、工具调用）都在 ChatViewModel——
+ * UI 文件尽量保持「无脑」是有意的：逻辑可单测，UI 只负责展示。
+ *
+ * 【几个容易被问的点】
+ * - 为什么发送按钮有时是「停止」：generating 状态切换，点击会调 vm.stop()
+ * - 为什么输入框 placeholder 会变：按 engineReady / retrievalOnly / OCR 中分状态提示
+ * - 消息长按 = 复制全文；引用角标点击 = 跳到来源片段
+ */
 @Composable
 fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val state by vm.state.collectAsState()
