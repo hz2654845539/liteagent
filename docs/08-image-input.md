@@ -1,7 +1,7 @@
 # 08 · 图像输入：从 JD 到实现的取舍
 
 > 时间：2026-10-17 21:05
-> 设备：DNAKE v911（无 Google Play Services）
+> 设备：一台国产安卓工控设备（无 Google Play Services）
 > 结论：**图片 → 文字 → 模型回答，整条链路在无 GMS 的 2GB 设备上跑通了。**
 
 ---

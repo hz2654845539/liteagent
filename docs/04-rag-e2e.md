@@ -1,6 +1,6 @@
 # 04 · RAG 端到端验证（真机）
 
-> 设备：DNAKE v911（Allwinner A537 / 1950MB / Android 15）
+> 设备：一台国产安卓工控设备（Allwinner A537 / 1950MB / Android 15）
 > 包：release（`com.liteagent.app`，R8 混淆后）
 > 时间：2026-10-17 19:54
 > 结论：**全链路通，包括引用标注。**

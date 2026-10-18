@@ -43,7 +43,7 @@ class ModelStore(private val context: Context) {
      * 模型根目录：**应用私有内部存储**。
      *
      * 为什么不用 getExternalFilesDir：
-     * 实测在 DNAKE v911（Android 15 / Allwinner A537）上，用 adb push 到
+     * 实测在 一台国产安卓工控设备（Android 15 / Allwinner A537）上，用 adb push 到
      * `/sdcard/Android/data/<pkg>/files/models` 的文件，App 侧 `File.exists()` 返回 false——
      * shell 与 App 的挂载命名空间不一致，外部存储这条路在手动导入时不可靠。
      *

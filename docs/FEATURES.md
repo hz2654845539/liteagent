@@ -244,7 +244,7 @@ files/benchmark/    跑分结果
 
 ### 为什么模型放在应用私有目录，而不是 /sdcard
 
-这台设备（DNAKE v911）的 `/data` 和 `/storage/emulated/0` **是同一块物理分区**：
+这台设备（一台国产安卓工控设备）的 `/data` 和 `/storage/emulated/0` **是同一块物理分区**：
 
 ```
 /dev/block/mmcblk0p30  ext4   → /data

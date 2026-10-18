@@ -1,6 +1,6 @@
 # 05 · 线程数调优实验
 
-> 设备：DNAKE v911（Allwinner A537，8 核但 `availableProcessors` = 5，最高 1752 MHz / 1950MB）
+> 设备：一台国产安卓工控设备（Allwinner A537，8 核但 `availableProcessors` = 5，最高 1752 MHz / 1950MB）
 > 模型：Qwen2.5-0.5B-Instruct-MNN · W4 · 1K 上下文 · mmap · GPU 关
 > 时间：2026-10-17 20:30
 > 结论：**3 线程最优。5 线程比 3 线程慢 10%——线程不是越多越好。**

@@ -57,7 +57,7 @@ class RecommendTest(unittest.TestCase):
         )
 
     def test_2gb_device_gets_extreme(self):
-        # DNAKE v911 实测 1950MB：不属于"拒绝"，而是给极限档
+        # 一台国产安卓工控设备 实测 1950MB：不属于"拒绝"，而是给极限档
         result = recommend(self._profile(1950))
         self.assertTrue(result.supported)
         self.assertTrue(result.restricted)

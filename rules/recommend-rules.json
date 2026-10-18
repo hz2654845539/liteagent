@@ -17,7 +17,7 @@
   },
 
   "extreme": {
-    "_comment": "极限档：1500-3500MB。能跑 0.5B，但必须 mmap + 短上下文 + 少线程。典型样本：DNAKE v911（Allwinner A537 / 1950MB / Mali-G57 / API 35）",
+    "_comment": "极限档：1500-3500MB。能跑 0.5B，但必须 mmap + 短上下文 + 少线程。典型样本：一台国产安卓工控设备（Allwinner A537 / 1950MB / Mali-G57 / API 35）",
     "aboveTotalMemMb": 1500,
     "belowTotalMemMb": 3500,
     "modelId": "Qwen2.5-0.5B-Instruct-MNN",

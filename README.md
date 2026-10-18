@@ -8,7 +8,7 @@
 
 ---
 
-## 真机核心指标（DNAKE v911 · Allwinner A537 · 1950MB · Android 15）
+## 真机核心指标（一台国产安卓工控设备 · Allwinner A537 · 1950MB · Android 15）
 
 | 指标 | Qwen2.5-0.5B W4 | Qwen2.5-1.5B W4 |
 |---|---|---|
@@ -63,7 +63,7 @@
 | 图像输入 | ✅ | 图片 → 中文 OCR → 回填输入框。**无 Google 服务的设备实测可用** |
 | 会话管理 | ✅ | 多会话持久化、切换、删除、导出 Markdown |
 | 人格预设 | ✅ | 助理 / 翻译 / 代码 / 总结（借鉴 PocketPal 的 Pals）|
-| **真机推理** | ✅ | DNAKE v911（**1950MB**）跑通 0.5B，decode 3.7 tok/s |
+| **真机推理** | ✅ | 一台国产安卓工控设备（**1950MB**）跑通 0.5B，decode 3.7 tok/s |
 | **整夜验证** | ✅ | 10 项真机自动化验证（崩溃恢复 / 多会话 / 导出 / 1.5B 压力 / OCR 边界），[报告](docs/11-overnight-verification.md) |
 
 ---
@@ -170,7 +170,7 @@ jieba 类分词库要带 5MB 词典，APK 体积是硬成本。"量化精度" �
 
 ~~还没有首 token 延迟~~ 已修复：UI 路径的 `ttftMs` 已可用（perf 快照里），下方真机表为 bench 模式数据，UI 对话因含加载/检索与 bench 口径不同。
 
-### 真机实测（DNAKE v911 · Allwinner A537 · 1950MB · Android 15）
+### 真机实测（一台国产安卓工控设备 · Allwinner A537 · 1950MB · Android 15）
 
 | 指标 | 值 |
 |---|---|

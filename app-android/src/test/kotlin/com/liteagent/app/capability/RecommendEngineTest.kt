@@ -61,7 +61,7 @@ class RecommendEngineTest {
 
     @Test
     fun `2GB 工控机走极限档而不是拒绝`() {
-        // DNAKE v911 实测 totalMem 1950MB。
+        // 一台国产安卓工控设备 实测 totalMem 1950MB。
         // 判它"能跑"的依据：0.5B 的 embeddings 走 MNN 的 DiskEmbedding 不占内存，
         // 常驻只有权重 + KV + workspace，约 300-450MB，塞得进 692MB 可用内存。
         val profile = profile(1950)

@@ -1,6 +1,6 @@
 # 在 2GB 工控设备上跑端侧 LLM：可行性与降级方案
 
-> 目标设备：DNAKE v911 / Allwinner A537 / 1950MB / Mali-G57 / Android 15 (API 35)
+> 目标设备：一台国产安卓工控设备 / Allwinner A537 / 1950MB / Mali-G57 / Android 15 (API 35)
 > 时间：2026-10-17
 > 结论：**能跑，但只能做"短输出"任务。产品定位必须跟着改。**
 

@@ -48,7 +48,7 @@
 
 ## 三、本项目的实测（唯一一手数据）
 
-DNAKE v911 / Allwinner A537 / **1950MB** / Android 15 / Qwen2.5-0.5B W4 / 1K 上下文：
+一台国产安卓工控设备 / Allwinner A537 / **1950MB** / Android 15 / Qwen2.5-0.5B W4 / 1K 上下文：
 
 | 指标 | 值 |
 |---|---|

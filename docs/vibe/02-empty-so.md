@@ -20,7 +20,7 @@ Windows 环境，用 Ninja。
 ```
 [662/662] Linking CXX shared library libMNN.so
 BUILD SUCCESSFUL
--rw-r--r-- 1 dnake 197121 5.7M libMNN.so
+-rw-r--r-- 1 user 197121 5.7M libMNN.so
 ```
 
 看起来完全没问题。5.7MB，链接成功，零错误。

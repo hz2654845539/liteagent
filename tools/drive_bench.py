@@ -7,13 +7,15 @@
     python tools/drive_bench.py
 """
 
+import os
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-ADB = r"C:\Users\dnake\Downloads\platform-tools-latest-windows\platform-tools\adb.exe"
+# 默认用 PATH 里的 adb；如果你的 adb 不在 PATH，改成绝对路径或设 ADB 环境变量
+ADB = os.environ.get("ADB", "adb")
 PKG = "com.liteagent.app.debug"
 ACT = f"{PKG}/com.liteagent.app.MainActivity"
 ROOT = Path(__file__).resolve().parents[1]
